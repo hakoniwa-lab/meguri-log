@@ -5,7 +5,7 @@
    index.html / css / js / data を変更したら、必ず VERSION を上げること。
    上げないと、既に開いたことのある端末は古いキャッシュを返し続け、
    修正がいつまでも届かない（Service Workerは sw.js 自体が変わったときだけ再インストールされる）。 */
-const VERSION = 'v7';
+const VERSION = 'v8';
 const SHELL = 'meguri-shell-' + VERSION;
 const TILES = 'meguri-tiles-' + VERSION;
 const TILE_LIMIT = 400;
@@ -62,9 +62,30 @@ self.addEventListener('fetch', (e) => {
     return;
   }
 
-  // 自前のファイル: キャッシュ優先。無ければ取得してキャッシュ
-  if (url.origin === self.location.origin) {
+  if (url.origin !== self.location.origin) return;
+
+  // ★アプリのコード（HTML/JS/CSS/manifest）はネットワーク優先★
+  // ここをキャッシュ優先にしていたため、修正を公開しても端末に古い画面が出続けた。
+  // オンラインなら常に最新を取り、取れなかったときだけキャッシュに落とす。
+  const p = url.pathname;
+  const isCode = p.endsWith('/') || p.endsWith('.html') ||
+                 p.endsWith('.js') || p.endsWith('.css') || p.endsWith('.webmanifest');
+
+  if (isCode) {
     e.respondWith(
+      fetch(req).then((res) => {
+        if (res && res.status === 200) {
+          const copy = res.clone();
+          caches.open(SHELL).then((c) => c.put(req, copy));
+        }
+        return res;
+      }).catch(() => caches.match(req).then((hit) => hit || Response.error()))
+    );
+    return;
+  }
+
+  // 地図データ・画像・フォント等は中身が変わらないのでキャッシュ優先でよい
+  e.respondWith(
       caches.match(req).then((hit) => hit || fetch(req).then((res) => {
         if (res && res.status === 200) {
           const copy = res.clone();
@@ -72,8 +93,12 @@ self.addEventListener('fetch', (e) => {
         }
         return res;
       }))
-    );
-  }
+  );
+});
+
+// 待機中の新バージョンを、画面側の指示で即座に有効化する
+self.addEventListener('message', (e) => {
+  if (e.data === 'skip-waiting') self.skipWaiting();
 });
 
 async function trimCache(name, max) {

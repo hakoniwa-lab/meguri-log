@@ -160,3 +160,18 @@ a{color:var(--navy)}
 .diag__row{display:flex; justify-content:space-between; gap:12px; padding:7px 0; border-bottom:1px dashed var(--line); font-size:13px}
 .diag__row span{color:var(--muted)}
 .diag__advice{margin:10px 0 0; font-size:12.5px; color:#8a5a00; background:#fff6e5; border-left:3px solid var(--amber); padding:9px 11px; border-radius:0 6px 6px 0; line-height:1.65}
+
+
+/* ---- 更新のお知らせ ---- */
+.updatebar{
+  position:fixed; left:12px; right:12px; bottom:calc(14px + env(safe-area-inset-bottom));
+  z-index:1500; display:flex; align-items:center; justify-content:space-between; gap:12px;
+  background:var(--navy); color:#fff; padding:12px 14px; border-radius:12px;
+  box-shadow:0 6px 20px rgba(0,0,0,.3); font-size:13.5px; font-weight:700;
+}
+.updatebar__btn{
+  appearance:none; border:0; border-radius:99px; padding:9px 16px;
+  background:var(--amber); color:#3a2600; font:inherit; font-size:13px; font-weight:700; cursor:pointer;
+  white-space:nowrap;
+}
+.updatebar__btn:disabled{opacity:.7}

@@ -7,6 +7,10 @@
 (() => {
   'use strict';
 
+  // sw.js の VERSION と必ず揃えること。設定画面に表示され、
+  // 端末に届いている版を目視で確認できるようにしている。
+  const APP_VERSION = 'v8';
+
   const CATEGORY = 'pref';
   const state = {
     features: [],        // GeoJSONのfeature配列（マスタ地点）
@@ -514,6 +518,7 @@
     const osName = isIOS ? 'iPhone / iPad' : (isAndroid ? 'Android' : 'パソコンなど');
 
     const rows = [
+      ['アプリのバージョン', APP_VERSION],
       ['端末の種類', osName],
       ['写真の共有', canFiles ? '使えます' : '使えません'],
       ['位置情報', ('geolocation' in navigator) ? '使えます' : '使えません'],
@@ -547,6 +552,66 @@
   }
 
   // ---------------------------------------------------------------
+  // 更新の受け取り
+  // 端末に古い画面が残り続ける事故を防ぐため、
+  // ①起動時に更新を確認 ②画面に戻るたびに確認 ③新版が来たら画面上で知らせて即適用
+  // の3段構えにする。
+  // ---------------------------------------------------------------
+  function initServiceWorker() {
+    if (!('serviceWorker' in navigator)) return;
+
+    navigator.serviceWorker.register('./sw.js').then((reg) => {
+      reg.update().catch(() => {});
+
+      // 表示に戻ったときにも更新を確認する（アプリを開きっぱなしの人向け）
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) reg.update().catch(() => {});
+      });
+
+      if (reg.waiting) showUpdateBar(reg.waiting);
+
+      reg.addEventListener('updatefound', () => {
+        const sw = reg.installing;
+        if (!sw) return;
+        sw.addEventListener('statechange', () => {
+          // 既に動いている版がある状態で新版が待機に入った＝更新あり
+          if (sw.state === 'installed' && navigator.serviceWorker.controller) {
+            showUpdateBar(sw);
+          }
+        });
+      });
+    }).catch(() => {});
+
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloaded) return;
+      reloaded = true;
+      location.reload();
+    });
+  }
+
+  function showUpdateBar(worker) {
+    if ($('#update-bar')) return;
+    const bar = document.createElement('div');
+    bar.id = 'update-bar';
+    bar.className = 'updatebar';
+    const msg = document.createElement('span');
+    msg.textContent = '新しいバージョンがあります';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'updatebar__btn';
+    btn.textContent = '更新する';
+    btn.addEventListener('click', () => {
+      btn.disabled = true;
+      btn.textContent = '更新中…';
+      worker.postMessage('skip-waiting');
+    });
+    bar.appendChild(msg);
+    bar.appendChild(btn);
+    document.body.appendChild(bar);
+  }
+
+  // ---------------------------------------------------------------
   function toast(msg) {
     const t = $('#toast');
     t.textContent = msg;
@@ -560,8 +625,6 @@
       console.error(e);
       alert('起動に失敗しました: ' + e.message);
     });
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('./sw.js').catch(() => {});
-    }
+    initServiceWorker();
   });
 })();
