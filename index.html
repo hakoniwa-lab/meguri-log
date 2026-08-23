@@ -121,6 +121,12 @@
     <p class="muted" id="sheet-coords"></p>
     <p class="chome" id="sheet-address"></p>
 
+    <!-- 既存の記録を編集しているときだけ出る。新規と見分けがつかないと誤って二重記録するため -->
+    <div class="editbar" id="edit-bar">
+      <span id="edit-bar-text">記録を編集中</span>
+      <button type="button" id="edit-cancel" class="editbar__btn">やめる</button>
+    </div>
+
     <label class="field">
       <span>訪れた日</span>
       <input type="date" id="visit-date">

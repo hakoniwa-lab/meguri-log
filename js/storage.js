@@ -138,6 +138,12 @@ const Store = (() => {
       return rec.id;
     },
 
+    // 編集で写真を外したときに本体も消す。参照が切れたBlobを溜めないため。
+    async deletePhoto(id) {
+      const t = tx(['photos'], 'readwrite');
+      await reqToPromise(t.objectStore('photos').delete(id));
+    },
+
     async getPhoto(id) {
       const t = tx(['photos'], 'readonly');
       return reqToPromise(t.objectStore('photos').get(id));

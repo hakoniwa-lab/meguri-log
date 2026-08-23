@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v10';
+  const APP_VERSION = 'v11';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -46,6 +46,7 @@
     chomeCount: 0,
     loadingCity: false,
     region: 'all',
+    editing: null,      // 編集中の記録（nullなら新規記録）
   };
 
   const $ = (sel) => document.querySelector(sel);
@@ -349,6 +350,11 @@
         refreshMap(); renderList(); renderProgress();
         await renderVisitList(spotId);
       });
+      const edit = document.createElement('button');
+      edit.className = 'linkbtn linkbtn--edit';
+      edit.textContent = '編集';
+      edit.addEventListener('click', () => startEdit(v));
+      head.appendChild(edit);
       head.appendChild(del);
       row.appendChild(head);
 
@@ -403,6 +409,9 @@
   function clearPending() {
     state.pending.forEach((p) => URL.revokeObjectURL(p.url));
     state.pending = [];
+    state.editing = null;
+    const bar = $('#edit-bar'); if (bar) bar.classList.remove('is-on');
+    const sv = $('#visit-save'); if (sv) sv.textContent = 'この訪問を記録する';
     const c = $('#photo-camera'); if (c) c.value = '';
     const l = $('#photo-library'); if (l) l.value = '';
     renderPending();
@@ -433,6 +442,33 @@
     });
   }
 
+  // 既存の記録を読み込んで編集モードに入る。
+  // その場で書いたメモしか残せないと後から直せないため、日付・メモ・写真を後編集できるようにする。
+  async function startEdit(visit) {
+    clearPending();                       // 先に new/edit 状態をまっさらにする
+    state.editing = visit;
+
+    $('#visit-date').value = visit.visitedAt || new Date().toISOString().slice(0, 10);
+    $('#visit-memo').value = visit.memo || '';
+
+    // 既存の写真は existingId 付きで pending に載せる。
+    // 触らなければ同じIDのまま保存され、×を押したものだけが外れる。
+    for (const pid of (visit.photoIds || [])) {
+      const ph = await Store.getPhoto(pid);
+      if (!ph) continue;
+      state.pending.push({ blob: ph.blob, url: URL.createObjectURL(ph.blob), existingId: pid });
+    }
+    renderPending();
+
+    $('#visit-save').textContent = 'この内容で更新する';
+    const bar = $('#edit-bar');
+    if (bar) {
+      bar.classList.add('is-on');
+      $('#edit-bar-text').textContent = (visit.visitedAt || '') + ' の記録を編集中';
+    }
+    $('.sheet__body').scrollTop = 0;
+  }
+
   async function addPending(fileList) {
     for (const f of fileList) {
       if (!f || !f.type.startsWith('image/')) continue;
@@ -456,29 +492,54 @@
       await addPending(e.target.files); e.target.value = '';
     });
 
+    $('#edit-cancel').addEventListener('click', () => {
+      clearPending();
+      $('#visit-date').value = new Date().toISOString().slice(0, 10);
+      $('#visit-memo').value = '';
+    });
+
     $('#visit-save').addEventListener('click', async () => {
       if (!state.selected) return;
       const sel = state.selected;
       const spotId = spotIdOf(sel.level, sel.code);
-      const photoIds = [];
-      for (const p of state.pending) photoIds.push(await Store.putPhoto(p.blob));
 
-      await Store.addVisit({
-        spotId,
-        category: sel.level,
-        name: sel.name,
-        visitedAt: $('#visit-date').value || new Date().toISOString().slice(0, 10),
-        memo: $('#visit-memo').value.trim(),
-        coords: sel.coords,
-        address: sel.address,
-        photoIds,
-      });
+      // 既存写真は元のIDを使い回し、新しく足したものだけ保存する
+      const photoIds = [];
+      for (const p of state.pending) {
+        photoIds.push(p.existingId || await Store.putPhoto(p.blob));
+      }
+
+      if (state.editing) {
+        const v = state.editing;
+        // 編集で外された写真は本体からも消す（孤児レコードを残さない）
+        for (const old of (v.photoIds || [])) {
+          if (!photoIds.includes(old)) await Store.deletePhoto(old);
+        }
+        await Store.updateVisit(Object.assign({}, v, {
+          visitedAt: $('#visit-date').value || v.visitedAt,
+          memo: $('#visit-memo').value.trim(),
+          photoIds,
+          updatedAt: new Date().toISOString(),
+        }));
+      } else {
+        await Store.addVisit({
+          spotId,
+          category: sel.level,
+          name: sel.name,
+          visitedAt: $('#visit-date').value || new Date().toISOString().slice(0, 10),
+          memo: $('#visit-memo').value.trim(),
+          coords: sel.coords,
+          address: sel.address,
+          photoIds,
+        });
+      }
       await refreshVisited();
       refreshMap(); renderList(); renderProgress();
       await renderVisitList(spotId);
+      const wasEditing = !!state.editing;
       $('#visit-memo').value = '';
       clearPending();
-      toast(sel.name + ' を記録しました');
+      toast(sel.name + (wasEditing ? ' の記録を更新しました' : ' を記録しました'));
     });
   }
 
