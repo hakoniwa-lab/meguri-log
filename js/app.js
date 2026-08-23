@@ -9,12 +9,25 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v9';
+  const APP_VERSION = 'v10';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
   // 「塗る」のをあきらめて「記録する」だけにすれば、データ量ゼロで丁目まで扱える。
   const REVGEO = 'https://mreversegeocoder.gsi.go.jp/reverse-geocoder/LonLatToAddress';
+
+  // 8地方区分。コードの範囲で持つと、市区町村コードの先頭2桁からそのまま引ける。
+  const REGIONS = [
+    { key: 'all',  label: 'すべて', min: 1,  max: 47 },
+    { key: 'hok',  label: '北海道', min: 1,  max: 1  },
+    { key: 'toh',  label: '東北',   min: 2,  max: 7  },
+    { key: 'kan',  label: '関東',   min: 8,  max: 14 },
+    { key: 'chu',  label: '中部',   min: 15, max: 23 },
+    { key: 'kin',  label: '近畿',   min: 24, max: 30 },
+    { key: 'cgk',  label: '中国',   min: 31, max: 35 },
+    { key: 'sik',  label: '四国',   min: 36, max: 39 },
+    { key: 'kyu',  label: '九州・沖縄', min: 40, max: 47 },
+  ];
 
   const LEVELS = {
     pref: { label: '都道府県', file: './data/prefectures.geojson', total: 47 },
@@ -32,6 +45,7 @@
     visited: { pref: new Set(), city: new Set() },
     chomeCount: 0,
     loadingCity: false,
+    region: 'all',
   };
 
   const $ = (sel) => document.querySelector(sel);
@@ -39,12 +53,30 @@
 
   const spotIdOf = (level, code) => level + '-' + code;
 
+  // 配布元のGeoJSONはコード順に並んでいるとは限らない（都道府県版は京都府が先頭だった）。
+  // 一覧の見出しは「並んでいること」が前提なので、読み込んだ直後に必ず並べ替える。
+  function sortByCode(gj) {
+    if (gj && Array.isArray(gj.features)) {
+      gj.features.sort((a, b) =>
+        parseInt(a.properties.code, 10) - parseInt(b.properties.code, 10));
+    }
+    return gj;
+  }
+
+  // 都道府県コード（1〜47）を取り出す。市区町村コードは先頭2桁がそれにあたる。
+  const prefCodeOf = (level, code) =>
+    level === 'pref' ? parseInt(code, 10) : parseInt(String(code).slice(0, 2), 10);
+
+  function regionOf(prefCode) {
+    return REGIONS.find((r) => r.key !== 'all' && prefCode >= r.min && prefCode <= r.max);
+  }
+
   // ---------------------------------------------------------------
   // 起動
   // ---------------------------------------------------------------
   async function boot() {
     await Store.init();
-    state.geo.pref = await fetch(LEVELS.pref.file).then((r) => r.json());
+    state.geo.pref = sortByCode(await fetch(LEVELS.pref.file).then((r) => r.json()));
     await refreshVisited();
 
     initMap();
@@ -133,7 +165,7 @@
     if (level === 'city') state.loadingCity = true;
     toast('市区町村の地図を読み込んでいます…');
     try {
-      state.geo[level] = await fetch(LEVELS[level].file).then((r) => r.json());
+      state.geo[level] = sortByCode(await fetch(LEVELS[level].file).then((r) => r.json()));
       return true;
     } catch (e) {
       toast('地図データを読み込めませんでした');
@@ -528,7 +560,25 @@
     $('#progress-sub').textContent = sub.join(' ・ ');
   }
 
+  function renderRegionChips() {
+    const box = $('#regions');
+    if (!box || box.childElementCount) return;
+    REGIONS.forEach((r) => {
+      const b = document.createElement('button');
+      b.className = 'rgbtn' + (r.key === state.region ? ' is-active' : '');
+      b.dataset.region = r.key;
+      b.textContent = r.label;
+      b.addEventListener('click', () => {
+        state.region = r.key;
+        $$('.rgbtn').forEach((x) => x.classList.toggle('is-active', x.dataset.region === r.key));
+        renderList();
+      });
+      box.appendChild(b);
+    });
+  }
+
   function renderList() {
+    renderRegionChips();
     const box = $('#list');
     const gj = state.geo[state.level];
     box.innerHTML = '';
@@ -538,43 +588,65 @@
     }
     const q = (($('#list-filter') || {}).value || '').trim();
     const onlyTodo = !!(($('#only-todo') || {}).checked);
-    let feats = gj.features.slice();
-    if (q) {
-      feats = feats.filter((f) =>
-        (f.properties.name || '').includes(q) || (f.properties.pref || '').includes(q));
-    }
-    if (onlyTodo) {
-      feats = feats.filter((f) =>
-        !state.visited[state.level].has(spotIdOf(state.level, f.properties.code)));
-    }
+    const reg = REGIONS.find((r) => r.key === state.region) || REGIONS[0];
+
+    let feats = gj.features.filter((f) => {
+      const pc = prefCodeOf(state.level, f.properties.code);
+      if (!(pc >= reg.min && pc <= reg.max)) return false;
+      if (q && !((f.properties.name || '').includes(q) || (f.properties.pref || '').includes(q))) return false;
+      if (onlyTodo && state.visited[state.level].has(spotIdOf(state.level, f.properties.code))) return false;
+      return true;
+    });
+
     if (!feats.length) {
       box.innerHTML = '<p class="muted" style="padding:12px">該当がありません。</p>';
       return;
     }
-    const frag = document.createDocumentFragment();
+
+    // 見出しで区切る。市区町村は都道府県ごと、都道府県は地方ごと。
+    const groupKey = (f) => {
+      const pc = prefCodeOf(state.level, f.properties.code);
+      if (state.level === 'city') return f.properties.pref || '';
+      const r = regionOf(pc);
+      return r ? r.label : '';
+    };
+
+    const PAGE = 400;
     let shown = 0;
-    for (const f of feats) {
-      if (state.level === 'city' && shown >= 300) break;
-      frag.appendChild(makeRow(f));
-      shown++;
-    }
-    box.appendChild(frag);
-    if (state.level === 'city' && feats.length > shown) {
+    let lastGroup = null;
+
+    const drawChunk = (before) => {
+      const frag = document.createDocumentFragment();
+      let n = 0;
+      for (const f of feats.slice(shown)) {
+        if (n >= PAGE) break;
+        const g = groupKey(f);
+        if (g !== lastGroup) {
+          const h = document.createElement('div');
+          h.className = 'group';
+          const cnt = feats.filter((x) => groupKey(x) === g).length;
+          const done = feats.filter((x) => groupKey(x) === g &&
+            state.visited[state.level].has(spotIdOf(state.level, x.properties.code))).length;
+          h.innerHTML = `<span>${g}</span><small>${done} / ${cnt}</small>`;
+          frag.appendChild(h);
+          lastGroup = g;
+        }
+        frag.appendChild(makeRow(f));
+        n++;
+      }
+      shown += n;
+      if (before) box.insertBefore(frag, before);
+      else box.appendChild(frag);
+    };
+
+    drawChunk(null);
+
+    if (shown < feats.length) {
       const more = document.createElement('button');
-      more.className = 'btn btn--sub';
-      more.style.margin = '8px auto';
-      more.style.display = 'block';
+      more.className = 'btn btn--sub more';
       more.textContent = `続きを表示（残り ${feats.length - shown} 件）`;
       more.addEventListener('click', () => {
-        const f2 = document.createDocumentFragment();
-        let n = 0;
-        for (const f of feats.slice(shown)) {
-          if (n >= 300) break;
-          f2.appendChild(makeRow(f));
-          n++;
-        }
-        shown += n;
-        box.insertBefore(f2, more);
+        drawChunk(more);
         if (shown >= feats.length) more.remove();
         else more.textContent = `続きを表示（残り ${feats.length - shown} 件）`;
       });
