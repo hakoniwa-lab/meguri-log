@@ -206,11 +206,24 @@
       for (const pid of (v.photoIds || [])) {
         const p = await Store.getPhoto(pid);
         if (!p) continue;
+        const fig = document.createElement('div');
+        fig.className = 'shot';
         const img = document.createElement('img');
         img.className = 'visit__photo';
         img.src = URL.createObjectURL(p.blob);
         img.addEventListener('load', () => URL.revokeObjectURL(img.src), { once: true });
-        row.appendChild(img);
+        fig.appendChild(img);
+
+        // アプリ内カメラで撮った写真は端末のライブラリには残らない
+        // （ブラウザから写真ライブラリへ書き込むAPIは存在しないため）。
+        // 端末に残したい人向けに、共有シート経由の保存口をここに用意する。
+        const save = document.createElement('button');
+        save.type = 'button';
+        save.className = 'shot__save';
+        save.textContent = '端末に保存';
+        save.addEventListener('click', () => savePhotoToDevice(p, v));
+        fig.appendChild(save);
+        row.appendChild(fig);
       }
       box.appendChild(row);
     }
@@ -296,6 +309,34 @@
       clearPending();
       toast(state.selected.name + ' を記録しました');
     });
+  }
+
+  // 写真を端末側に残す。
+  // Webから写真ライブラリへ直接書き込むAPIは存在しないので、
+  // ①共有シート（実機のiOS/Androidはこれが使える。「画像を保存」でカメラロールに入る）
+  // ②ダウンロード（共有が無い環境のフォールバック。iOSは"ファイル"、Androidはダウンロードへ）
+  // の順で試す。
+  async function savePhotoToDevice(photo, visit) {
+    const name = `meguri-${(visit.name || 'photo')}-${visit.visitedAt || ''}.jpg`
+      .replace(/[\\/:*?"<>|]/g, '_');
+    const file = new File([photo.blob], name, { type: photo.type || 'image/jpeg' });
+
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title: visit.name || 'めぐりログ' });
+        return;
+      } catch (e) {
+        if (e && e.name === 'AbortError') return;   // ユーザーが閉じただけ
+        // 共有に失敗したらダウンロードへ落とす
+      }
+    }
+
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(photo.blob);
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    toast('写真を保存しました');
   }
 
   // 写真は長辺1600pxまで縮めてから保存する。

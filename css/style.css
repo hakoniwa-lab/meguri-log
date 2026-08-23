@@ -141,3 +141,12 @@ a{color:var(--navy)}
   appearance:none; border:0; border-radius:99px; background:rgba(20,26,38,.72); color:#fff;
   font-size:15px; cursor:pointer; padding:0; text-align:center;
 }
+
+/* ---- 記録済み写真＋端末保存ボタン ---- */
+.shot{position:relative; margin-top:8px}
+.shot__save{
+  position:absolute; right:8px; bottom:8px;
+  appearance:none; border:0; border-radius:99px; padding:7px 13px;
+  background:rgba(20,26,38,.78); color:#fff; font:inherit; font-size:12px; font-weight:700;
+  cursor:pointer; backdrop-filter:blur(2px);
+}
