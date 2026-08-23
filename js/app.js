@@ -233,7 +233,7 @@
         const dlBtn = document.createElement('button');
         dlBtn.type = 'button';
         dlBtn.className = 'shot__btn';
-        dlBtn.textContent = '保存';
+        dlBtn.textContent = '端末に保存';
         dlBtn.addEventListener('click', () => downloadPhoto(p, v));
         acts.appendChild(dlBtn);
 

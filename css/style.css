@@ -144,12 +144,15 @@ a{color:var(--navy)}
 
 /* ---- 記録済み写真＋端末保存ボタン ---- */
 .shot{position:relative; margin-top:8px}
-.shot__acts{position:absolute; right:8px; bottom:8px; display:flex; gap:6px}
+/* 画像に重ねると見落とされる（実機で長押しメニューを使われてしまった）ので、
+   写真の下に独立した行として置く。 */
+.shot__acts{display:flex; gap:8px; margin-top:6px}
 .shot__btn{
-  appearance:none; border:0; border-radius:99px; padding:7px 14px;
-  background:rgba(20,26,38,.78); color:#fff; font:inherit; font-size:12px; font-weight:700;
-  cursor:pointer; backdrop-filter:blur(2px);
+  flex:1; appearance:none; border:1.5px solid var(--navy); border-radius:10px; padding:10px 8px;
+  background:#fff; color:var(--navy); font:inherit; font-size:13px; font-weight:700;
+  cursor:pointer;
 }
+.shot__btn:active{background:#eef2f8}
 
 /* ---- 端末の対応状況 ---- */
 .diag{margin-top:6px}
