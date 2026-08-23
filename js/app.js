@@ -1,7 +1,7 @@
 /*
   app.js — めぐりログ 本体
 
-  Phase 1: 都道府県制覇
+  Phase 1: 都道府県 / 市区町村の制覇 ＋ 町丁目の記録
   データの読み書きは storage.js の Store 経由でしか行わない（クラウド差し替えのため）。
 */
 (() => {
@@ -9,84 +9,158 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v8';
+  const APP_VERSION = 'v9';
 
-  const CATEGORY = 'pref';
+  // 国土地理院の逆ジオコーディング（APIキー不要）。
+  // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
+  // 「塗る」のをあきらめて「記録する」だけにすれば、データ量ゼロで丁目まで扱える。
+  const REVGEO = 'https://mreversegeocoder.gsi.go.jp/reverse-geocoder/LonLatToAddress';
+
+  const LEVELS = {
+    pref: { label: '都道府県', file: './data/prefectures.geojson', total: 47 },
+    city: { label: '市区町村', file: './data/municipalities.geojson', total: 1902 },
+  };
+
   const state = {
-    features: [],        // GeoJSONのfeature配列（マスタ地点）
-    visited: new Set(),  // 訪問済みの spotId
+    level: 'pref',
+    geo: { pref: null, city: null },   // 読み込んだGeoJSON（cityは初回切替時に取得）
     layer: null,
     map: null,
-    here: null,          // 現在地マーカー
-    selected: null,      // 記録シートで開いている spot
-    pending: [],         // 保存前に添付した写真 [{blob, url}]
+    here: null,
+    selected: null,
+    pending: [],
+    visited: { pref: new Set(), city: new Set() },
+    chomeCount: 0,
+    loadingCity: false,
   };
 
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => Array.prototype.slice.call(document.querySelectorAll(sel));
 
-  const spotIdOf = (code) => CATEGORY + '-' + code;
+  const spotIdOf = (level, code) => level + '-' + code;
 
   // ---------------------------------------------------------------
   // 起動
   // ---------------------------------------------------------------
   async function boot() {
     await Store.init();
-    const res = await fetch('./data/prefectures.geojson');
-    const gj = await res.json();
-    state.features = gj.features;
-    state.visited = await Store.getVisitedSpotIds();
+    state.geo.pref = await fetch(LEVELS.pref.file).then((r) => r.json());
+    await refreshVisited();
 
-    initMap(gj);
+    initMap();
     initTabs();
+    initLevelSwitch();
     initSheet();
     initSettings();
     renderList();
     renderProgress();
+    initServiceWorker();
+  }
+
+  // 訪問済みの集合を作り直す。
+  // 市区町村を記録していれば、その都道府県も当然訪れているので合成する
+  // （幻の記録を作らず、集計だけで導く）。
+  async function refreshVisited() {
+    const all = await Store.getAllVisits();
+    const pref = new Set();
+    const city = new Set();
+    const chome = new Set();
+    for (const v of all) {
+      if (v.category === 'pref') pref.add(v.spotId);
+      if (v.category === 'city') {
+        city.add(v.spotId);
+        const code = String(v.spotId).replace(/^city-/, '');
+        if (code.length >= 2) pref.add('pref-' + parseInt(code.slice(0, 2), 10));
+      }
+      if (v.address && v.address.lv01Nm) {
+        chome.add((v.address.muniCd || '') + '/' + v.address.lv01Nm);
+      }
+    }
+    state.visited.pref = pref;
+    state.visited.city = city;
+    state.chomeCount = chome.size;
   }
 
   // ---------------------------------------------------------------
   // 地図
   // ---------------------------------------------------------------
-  function initMap(gj) {
+  function initMap() {
     state.map = L.map('map', { zoomControl: true }).setView([37.5, 137.5], 5);
-
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 18,
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     }).addTo(state.map);
 
-    state.layer = L.geoJSON(gj, {
-      style: styleFor,
-      onEachFeature: (feat, layer) => {
-        layer.on('click', () => openSheet(feat.properties.code));
-        layer.bindTooltip(feat.properties.name, { sticky: true });
-      },
-    }).addTo(state.map);
-
+    drawLayer();
     $('#btn-here').addEventListener('click', () => locate(false));
     $('#btn-here-record').addEventListener('click', () => locate(true));
   }
 
   function styleFor(feat) {
-    const done = state.visited.has(spotIdOf(feat.properties.code));
+    const done = state.visited[state.level].has(spotIdOf(state.level, feat.properties.code));
     return {
       color: '#2c3e62',
-      weight: 1,
+      weight: state.level === 'city' ? 0.5 : 1,
       fillColor: done ? '#e8a33d' : '#c9d2e0',
       fillOpacity: done ? 0.75 : 0.35,
     };
+  }
+
+  function drawLayer() {
+    if (state.layer) {
+      state.map.removeLayer(state.layer);
+      state.layer = null;
+    }
+    const gj = state.geo[state.level];
+    if (!gj) return;
+    state.layer = L.geoJSON(gj, {
+      style: styleFor,
+      onEachFeature: (feat, layer) => {
+        layer.on('click', () => openSheet(state.level, feat.properties.code));
+        layer.bindTooltip(feat.properties.name, { sticky: true });
+      },
+    }).addTo(state.map);
   }
 
   function refreshMap() {
     if (state.layer) state.layer.setStyle(styleFor);
   }
 
+  // 2MBあるので起動時には読まない。市区町村に切り替えたときだけ取りに行く。
+  async function ensureLevelData(level) {
+    if (state.geo[level]) return true;
+    if (level === 'city' && state.loadingCity) return false;
+    if (level === 'city') state.loadingCity = true;
+    toast('市区町村の地図を読み込んでいます…');
+    try {
+      state.geo[level] = await fetch(LEVELS[level].file).then((r) => r.json());
+      return true;
+    } catch (e) {
+      toast('地図データを読み込めませんでした');
+      return false;
+    } finally {
+      state.loadingCity = false;
+    }
+  }
+
+  function initLevelSwitch() {
+    $$('.lvbtn').forEach((b) => {
+      b.addEventListener('click', async () => {
+        const lv = b.dataset.level;
+        if (lv === state.level) return;
+        if (!(await ensureLevelData(lv))) return;
+        state.level = lv;
+        $$('.lvbtn').forEach((x) => x.classList.toggle('is-active', x.dataset.level === lv));
+        drawLayer();
+        renderList();
+        renderProgress();
+      });
+    });
+  }
+
   // ---------------------------------------------------------------
-  // 現在地 → いまいる都道府県を判定
+  // 現在地
   // ---------------------------------------------------------------
-  // openRecord=false … 現在地へ地図を動かすだけ（記録シートは開かない）
-  // openRecord=true  … 現在地を判定して、その都道府県の記録シートを開く
   function locate(openRecord) {
     const btn = openRecord ? $('#btn-here-record') : $('#btn-here');
     const label = btn.textContent;
@@ -99,35 +173,32 @@
     const restore = () => { btn.disabled = false; btn.textContent = label; };
 
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
+      async (pos) => {
         restore();
         const { latitude: lat, longitude: lng } = pos.coords;
         if (state.here) state.map.removeLayer(state.here);
         state.here = L.circleMarker([lat, lng], {
           radius: 8, color: '#c0392b', fillColor: '#e74c3c', fillOpacity: 0.9, weight: 2,
         }).addTo(state.map);
-        // 記録するときは県全体が見える程度、移動だけのときは少し寄る
-        state.map.setView([lat, lng], openRecord ? 9 : 11);
+        state.map.setView([lat, lng], openRecord ? (state.level === 'city' ? 11 : 9) : 12);
 
-        const feat = findPrefectureAt(lat, lng);
+        const feat = findAt(state.level, lat, lng);
         if (!feat) {
-          toast('現在地は日本の都道府県の範囲外のようです');
+          toast('現在地は日本の範囲外のようです');
           return;
         }
         if (openRecord) {
-          openSheet(feat.properties.code, { lat, lng });
+          openSheet(state.level, feat.properties.code, { lat, lng });
         } else {
-          // 記録は割り込ませない。今どこにいるかだけ知らせる。
-          const done = state.visited.has(spotIdOf(feat.properties.code));
+          const done = state.visited[state.level].has(spotIdOf(state.level, feat.properties.code));
           toast(feat.properties.name + (done ? '（記録済み）' : '（未記録）'));
         }
       },
       (err) => {
         restore();
-        const msg = err.code === 1
+        toast(err.code === 1
           ? '位置情報の利用が許可されていません。ブラウザの設定から許可してください'
-          : '現在地を取得できませんでした';
-        toast(msg);
+          : '現在地を取得できませんでした');
       },
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
     );
@@ -139,15 +210,16 @@
     for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
       const xi = ring[i][0], yi = ring[i][1];
       const xj = ring[j][0], yj = ring[j][1];
-      const hit = ((yi > lat) !== (yj > lat)) &&
-        (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi);
-      if (hit) inside = !inside;
+      if (((yi > lat) !== (yj > lat)) &&
+          (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi)) inside = !inside;
     }
     return inside;
   }
 
-  function findPrefectureAt(lat, lng) {
-    for (const f of state.features) {
+  function findAt(level, lat, lng) {
+    const gj = state.geo[level];
+    if (!gj) return null;
+    for (const f of gj.features) {
       for (const poly of f.geometry.coordinates) {
         if (pointInRing(lng, lat, poly[0])) return f;
       }
@@ -155,19 +227,40 @@
     return null;
   }
 
+  // 町丁目・大字を住所文字列として取得する。通信できないときは何も返さない。
+  async function reverseGeocode(lat, lng) {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 8000);
+      const r = await fetch(`${REVGEO}?lat=${lat}&lon=${lng}`, { signal: ctrl.signal });
+      clearTimeout(t);
+      const j = await r.json();
+      const res = j && j.results;
+      if (res && res.lv01Nm) return { muniCd: res.muniCd || '', lv01Nm: res.lv01Nm };
+    } catch (e) { /* 圏外・失敗時は住所なしで記録する */ }
+    return null;
+  }
+
   // ---------------------------------------------------------------
   // 記録シート
   // ---------------------------------------------------------------
-  function featureByCode(code) {
-    return state.features.find((f) => f.properties.code === code);
+  function featureByCode(level, code) {
+    const gj = state.geo[level];
+    if (!gj) return null;
+    return gj.features.find((f) => String(f.properties.code) === String(code));
   }
 
-  async function openSheet(code, coords) {
-    const feat = featureByCode(code);
+  async function openSheet(level, code, coords) {
+    const feat = featureByCode(level, code);
     if (!feat) return;
-    state.selected = { code, name: feat.properties.name, coords: coords || null };
+    state.selected = {
+      level, code: String(code), name: feat.properties.name,
+      coords: coords || null, address: null,
+    };
 
     $('#sheet-title').textContent = feat.properties.name;
+    $('#sheet-sub').textContent = LEVELS[level].label +
+      (feat.properties.pref ? ' / ' + feat.properties.pref : '');
     $('#visit-date').value = new Date().toISOString().slice(0, 10);
     $('#visit-memo').value = '';
     clearPending();
@@ -175,8 +268,22 @@
       ? `現在地: ${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)}`
       : '座標は記録されません（地図から選択）';
 
-    await renderVisitList(spotIdOf(code));
+    await renderVisitList(spotIdOf(level, code));
     $('#sheet').classList.add('is-open');
+
+    // 住所の取得は画面表示を待たせない（取れたら後から差し込む）
+    if (coords) {
+      $('#sheet-address').textContent = '町丁目を調べています…';
+      const addr = await reverseGeocode(coords.lat, coords.lng);
+      if (state.selected && state.selected.code === String(code)) {
+        state.selected.address = addr;
+        $('#sheet-address').textContent = addr
+          ? '町丁目: ' + addr.lv01Nm
+          : '町丁目: 取得できませんでした（圏外でも記録はできます）';
+      }
+    } else {
+      $('#sheet-address').textContent = '';
+    }
   }
 
   function closeSheet() {
@@ -206,12 +313,19 @@
       del.addEventListener('click', async () => {
         if (!confirm('この記録を削除しますか？')) return;
         await Store.deleteVisit(v.id);
-        state.visited = await Store.getVisitedSpotIds();
+        await refreshVisited();
         refreshMap(); renderList(); renderProgress();
         await renderVisitList(spotId);
       });
       head.appendChild(del);
       row.appendChild(head);
+
+      if (v.address && v.address.lv01Nm) {
+        const a = document.createElement('p');
+        a.className = 'visit__addr';
+        a.textContent = v.address.lv01Nm;
+        row.appendChild(a);
+      }
       if (v.memo) {
         const m = document.createElement('p');
         m.className = 'visit__memo';
@@ -229,29 +343,23 @@
         img.addEventListener('load', () => URL.revokeObjectURL(img.src), { once: true });
         fig.appendChild(img);
 
-        // アプリ内カメラで撮った写真は端末のライブラリには残らない
-        // （ブラウザから写真ライブラリへ書き込むAPIは存在しないため）。
-        // 端末に残したい人向けに、共有シート経由の保存口をここに用意する。
         // 共有と保存は端末で挙動が違うので、1つのボタンにまとめない。
         // iPhone: 共有シートに「画像を保存」が出る
         // Android: 共有シートはアプリ一覧で「画像を保存」は無い → ダウンロードを使う
         const acts = document.createElement('div');
         acts.className = 'shot__acts';
-
         const shareBtn = document.createElement('button');
         shareBtn.type = 'button';
         shareBtn.className = 'shot__btn';
         shareBtn.textContent = '共有';
         shareBtn.addEventListener('click', () => sharePhoto(p, v));
         acts.appendChild(shareBtn);
-
         const dlBtn = document.createElement('button');
         dlBtn.type = 'button';
         dlBtn.className = 'shot__btn';
         dlBtn.textContent = '端末に保存';
         dlBtn.addEventListener('click', () => downloadPhoto(p, v));
         acts.appendChild(dlBtn);
-
         fig.appendChild(acts);
         row.appendChild(fig);
       }
@@ -318,72 +426,28 @@
 
     $('#visit-save').addEventListener('click', async () => {
       if (!state.selected) return;
-      const spotId = spotIdOf(state.selected.code);
+      const sel = state.selected;
+      const spotId = spotIdOf(sel.level, sel.code);
       const photoIds = [];
-      for (const p of state.pending) {
-        photoIds.push(await Store.putPhoto(p.blob));
-      }
+      for (const p of state.pending) photoIds.push(await Store.putPhoto(p.blob));
+
       await Store.addVisit({
         spotId,
-        category: CATEGORY,
-        name: state.selected.name,
+        category: sel.level,
+        name: sel.name,
         visitedAt: $('#visit-date').value || new Date().toISOString().slice(0, 10),
         memo: $('#visit-memo').value.trim(),
-        coords: state.selected.coords,
+        coords: sel.coords,
+        address: sel.address,
         photoIds,
       });
-      state.visited = await Store.getVisitedSpotIds();
+      await refreshVisited();
       refreshMap(); renderList(); renderProgress();
       await renderVisitList(spotId);
       $('#visit-memo').value = '';
       clearPending();
-      toast(state.selected.name + ' を記録しました');
+      toast(sel.name + ' を記録しました');
     });
-  }
-
-  // 写真を端末側に残す。
-  // Webから写真ライブラリへ直接書き込むAPIは存在しないので、
-  // ①共有シート（実機のiOS/Androidはこれが使える。「画像を保存」でカメラロールに入る）
-  // ②ダウンロード（共有が無い環境のフォールバック。iOSは"ファイル"、Androidはダウンロードへ）
-  // の順で試す。
-  function photoFileName(visit) {
-    return `meguri-${(visit.name || 'photo')}-${visit.visitedAt || ''}.jpg`
-      .replace(/[\\/:*?"<>|]/g, '_');
-  }
-
-  function canSharePhoto(photo, visit) {
-    if (!navigator.canShare || !navigator.share) return false;
-    try {
-      const f = new File([photo.blob], photoFileName(visit),
-        { type: photo.type || 'image/jpeg' });
-      return navigator.canShare({ files: [f] });
-    } catch (e) { return false; }
-  }
-
-  async function sharePhoto(photo, visit) {
-    if (!canSharePhoto(photo, visit)) {
-      toast('この端末は写真の共有に対応していません。「保存」を使ってください');
-      return;
-    }
-    const file = new File([photo.blob], photoFileName(visit),
-      { type: photo.type || 'image/jpeg' });
-    try {
-      await navigator.share({ files: [file], title: visit.name || 'めぐりログ' });
-    } catch (e) {
-      if (e && e.name === 'AbortError') return;   // ユーザーが閉じただけ
-      toast('共有できませんでした。「保存」を使ってください');
-    }
-  }
-
-  function downloadPhoto(photo, visit) {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(photo.blob);
-    a.download = photoFileName(visit);
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-    toast('保存しました。端末の「ダウンロード」を確認してください');
   }
 
   // 写真は長辺1600pxまで縮めてから保存する。
@@ -406,37 +470,134 @@
     });
   }
 
+  // ---- 写真の取り出し ----
+  function photoFileName(visit) {
+    return `meguri-${(visit.name || 'photo')}-${visit.visitedAt || ''}.jpg`
+      .replace(/[\\/:*?"<>|]/g, '_');
+  }
+
+  function canSharePhoto(photo, visit) {
+    if (!navigator.canShare || !navigator.share) return false;
+    try {
+      const f = new File([photo.blob], photoFileName(visit), { type: photo.type || 'image/jpeg' });
+      return navigator.canShare({ files: [f] });
+    } catch (e) { return false; }
+  }
+
+  async function sharePhoto(photo, visit) {
+    if (!canSharePhoto(photo, visit)) {
+      toast('この端末は写真の共有に対応していません。「端末に保存」を使ってください');
+      return;
+    }
+    const file = new File([photo.blob], photoFileName(visit), { type: photo.type || 'image/jpeg' });
+    try {
+      await navigator.share({ files: [file], title: visit.name || 'めぐりログ' });
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+      toast('共有できませんでした。「端末に保存」を使ってください');
+    }
+  }
+
+  function downloadPhoto(photo, visit) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(photo.blob);
+    a.download = photoFileName(visit);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    toast('保存しました。端末の「ダウンロード」を確認してください');
+  }
+
   // ---------------------------------------------------------------
   // 一覧・進捗
   // ---------------------------------------------------------------
   function renderProgress() {
-    const total = state.features.length;
-    const done = state.features.filter((f) => state.visited.has(spotIdOf(f.properties.code))).length;
+    const lv = state.level;
+    const total = state.geo[lv] ? state.geo[lv].features.length : LEVELS[lv].total;
+    const done = state.visited[lv].size;
     const pct = total ? Math.round((done / total) * 100) : 0;
-    $('#progress-text').textContent = `${done} / ${total} 制覇（${pct}%）`;
+    $('#progress-text').textContent =
+      `${LEVELS[lv].label} ${done} / ${total} 制覇（${pct}%）`;
     $('#progress-bar').style.width = pct + '%';
+
+    const sub = [];
+    sub.push(`都道府県 ${state.visited.pref.size}/47`);
+    sub.push(`市区町村 ${state.visited.city.size}/${LEVELS.city.total}`);
+    sub.push(`町丁目 ${state.chomeCount}`);
+    $('#progress-sub').textContent = sub.join(' ・ ');
   }
 
   function renderList() {
     const box = $('#list');
+    const gj = state.geo[state.level];
     box.innerHTML = '';
-    const sorted = state.features.slice().sort((a, b) => a.properties.code - b.properties.code);
-    for (const f of sorted) {
-      const id = spotIdOf(f.properties.code);
-      const done = state.visited.has(id);
-      const row = document.createElement('button');
-      row.className = 'row' + (done ? ' row--done' : '');
-      row.innerHTML = `<span class="row__mark">${done ? '●' : '○'}</span>
-                       <span class="row__name">${f.properties.name}</span>
-                       <span class="row__go">記録</span>`;
-      row.addEventListener('click', () => {
-        switchTab('map');
-        const b = L.geoJSON(f).getBounds();
-        state.map.fitBounds(b, { padding: [20, 20] });
-        openSheet(f.properties.code);
-      });
-      box.appendChild(row);
+    if (!gj) {
+      box.innerHTML = '<p class="muted" style="padding:12px">地図データを読み込んでください。</p>';
+      return;
     }
+    const q = (($('#list-filter') || {}).value || '').trim();
+    const onlyTodo = !!(($('#only-todo') || {}).checked);
+    let feats = gj.features.slice();
+    if (q) {
+      feats = feats.filter((f) =>
+        (f.properties.name || '').includes(q) || (f.properties.pref || '').includes(q));
+    }
+    if (onlyTodo) {
+      feats = feats.filter((f) =>
+        !state.visited[state.level].has(spotIdOf(state.level, f.properties.code)));
+    }
+    if (!feats.length) {
+      box.innerHTML = '<p class="muted" style="padding:12px">該当がありません。</p>';
+      return;
+    }
+    const frag = document.createDocumentFragment();
+    let shown = 0;
+    for (const f of feats) {
+      if (state.level === 'city' && shown >= 300) break;
+      frag.appendChild(makeRow(f));
+      shown++;
+    }
+    box.appendChild(frag);
+    if (state.level === 'city' && feats.length > shown) {
+      const more = document.createElement('button');
+      more.className = 'btn btn--sub';
+      more.style.margin = '8px auto';
+      more.style.display = 'block';
+      more.textContent = `続きを表示（残り ${feats.length - shown} 件）`;
+      more.addEventListener('click', () => {
+        const f2 = document.createDocumentFragment();
+        let n = 0;
+        for (const f of feats.slice(shown)) {
+          if (n >= 300) break;
+          f2.appendChild(makeRow(f));
+          n++;
+        }
+        shown += n;
+        box.insertBefore(f2, more);
+        if (shown >= feats.length) more.remove();
+        else more.textContent = `続きを表示（残り ${feats.length - shown} 件）`;
+      });
+      box.appendChild(more);
+    }
+  }
+
+  function makeRow(f) {
+    const lv = state.level;
+    const id = spotIdOf(lv, f.properties.code);
+    const done = state.visited[lv].has(id);
+    const row = document.createElement('button');
+    row.className = 'row' + (done ? ' row--done' : '');
+    const sub = lv === 'city' ? `<small class="row__pref">${f.properties.pref || ''}</small>` : '';
+    row.innerHTML = `<span class="row__mark">${done ? '●' : '○'}</span>
+                     <span class="row__name">${f.properties.name}${sub}</span>
+                     <span class="row__go">記録</span>`;
+    row.addEventListener('click', () => {
+      switchTab('map');
+      state.map.fitBounds(L.geoJSON(f).getBounds(), { padding: [20, 20] });
+      openSheet(lv, f.properties.code);
+    });
+    return row;
   }
 
   // ---------------------------------------------------------------
@@ -450,10 +611,17 @@
 
   function initTabs() {
     $$('.tab').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
+
+    let timer = null;
+    const onFilter = () => { clearTimeout(timer); timer = setTimeout(renderList, 180); };
+    const fi = $('#list-filter');
+    if (fi) fi.addEventListener('input', onFilter);
+    const ot = $('#only-todo');
+    if (ot) ot.addEventListener('change', renderList);
   }
 
   // ---------------------------------------------------------------
-  // 設定（書き出し・読み込み）
+  // 設定
   // ---------------------------------------------------------------
   function initSettings() {
     $('#btn-export').addEventListener('click', async () => {
@@ -462,7 +630,7 @@
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = `meguri-log-${new Date().toISOString().slice(0, 10)}.json`;
-      a.click();
+      document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     });
 
@@ -474,7 +642,7 @@
       try {
         const data = JSON.parse(await file.text());
         const r = await Store.importAll(data, { merge: true });
-        state.visited = await Store.getVisitedSpotIds();
+        await refreshVisited();
         refreshMap(); renderList(); renderProgress();
         toast(`読み込みました（記録${r.visits}件・写真${r.photos}枚）`);
       } catch (err) {
@@ -487,7 +655,7 @@
       if (!confirm('すべての記録を削除します。よろしいですか？\nこの操作は取り消せません。')) return;
       if (!confirm('本当に削除しますか？ 先に「書き出し」でバックアップを取ることを強くおすすめします。')) return;
       await Store.clearAll();
-      state.visited = new Set();
+      await refreshVisited();
       refreshMap(); renderList(); renderProgress();
       toast('削除しました');
     });
@@ -530,12 +698,12 @@
       advice = '「共有」を押すと共有シートが開きます。その中の「画像を保存」でカメラロールに入ります。';
     } else if (isAndroid) {
       advice = 'Androidの共有シートには「画像を保存」という項目がありません。' +
-        '端末に残すときは「保存」を押してください。ダウンロードフォルダに入ります。' +
+        '端末に残すときは「端末に保存」を押してください。ダウンロードフォルダに入ります。' +
         'カメラロールに確実に入れたい場合は、端末の標準カメラで撮ってから「写真から選ぶ」が確実です。';
     } else if (!canFiles) {
-      advice = 'この端末は写真の共有に対応していません。「保存」を使ってください。';
+      advice = 'この端末は写真の共有に対応していません。「端末に保存」を使ってください。';
     } else {
-      advice = '「共有」か「保存」のどちらかで写真を取り出せます。';
+      advice = '「共有」か「端末に保存」のどちらかで写真を取り出せます。';
     }
 
     box.innerHTML = '';
@@ -555,29 +723,21 @@
   // 更新の受け取り
   // 端末に古い画面が残り続ける事故を防ぐため、
   // ①起動時に更新を確認 ②画面に戻るたびに確認 ③新版が来たら画面上で知らせて即適用
-  // の3段構えにする。
   // ---------------------------------------------------------------
   function initServiceWorker() {
     if (!('serviceWorker' in navigator)) return;
 
     navigator.serviceWorker.register('./sw.js').then((reg) => {
       reg.update().catch(() => {});
-
-      // 表示に戻ったときにも更新を確認する（アプリを開きっぱなしの人向け）
       document.addEventListener('visibilitychange', () => {
         if (!document.hidden) reg.update().catch(() => {});
       });
-
       if (reg.waiting) showUpdateBar(reg.waiting);
-
       reg.addEventListener('updatefound', () => {
         const sw = reg.installing;
         if (!sw) return;
         sw.addEventListener('statechange', () => {
-          // 既に動いている版がある状態で新版が待機に入った＝更新あり
-          if (sw.state === 'installed' && navigator.serviceWorker.controller) {
-            showUpdateBar(sw);
-          }
+          if (sw.state === 'installed' && navigator.serviceWorker.controller) showUpdateBar(sw);
         });
       });
     }).catch(() => {});
@@ -625,6 +785,5 @@
       console.error(e);
       alert('起動に失敗しました: ' + e.message);
     });
-    initServiceWorker();
   });
 })();
