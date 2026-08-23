@@ -130,3 +130,14 @@ a{color:var(--navy)}
   .list{max-width:680px; margin:0 auto}
   .sheet__body{max-width:560px; margin:0 auto; border-radius:18px; bottom:5vh; left:16px; right:16px}
 }
+
+/* ---- 添付写真のプレビュー ---- */
+.field>span{}
+.preview{display:flex; flex-wrap:wrap; gap:8px; margin-top:8px}
+.preview__item{position:relative; width:74px; height:74px; border-radius:8px; overflow:hidden; border:1px solid var(--line)}
+.preview__item img{width:100%; height:100%; object-fit:cover; display:block}
+.preview__del{
+  position:absolute; top:2px; right:2px; width:22px; height:22px; line-height:20px;
+  appearance:none; border:0; border-radius:99px; background:rgba(20,26,38,.72); color:#fff;
+  font-size:15px; cursor:pointer; padding:0; text-align:center;
+}

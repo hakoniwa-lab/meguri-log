@@ -103,14 +103,19 @@
       <textarea id="visit-memo" rows="2" placeholder="何をした・何を見た など"></textarea>
     </label>
 
-    <label class="field">
+    <div class="field">
       <span>写真</span>
-      <!-- capture属性は付けない。付けるとカメラが直接起動してしまい、
-           保存済みの写真から選べなくなる（御朱印を後日撮る場合に困る）。
-           外しておくと、OSが「撮影する／ライブラリから選ぶ」を出してくれる。 -->
-      <input type="file" id="visit-photo" accept="image/*" multiple>
-      <small class="muted">撮影のほか、保存済みの写真からも選べます。複数枚まとめて追加できます。</small>
-    </label>
+      <!-- OSの選択ダイアログ任せにしない。
+           capture を付けるとカメラ直行でライブラリが選べず、
+           外すと端末によってはカメラが出てこない。両方の入口を明示的に置くのが確実。 -->
+      <div class="btns">
+        <button type="button" id="btn-camera" class="btn btn--sub">カメラで撮る</button>
+        <button type="button" id="btn-library" class="btn btn--sub">写真から選ぶ</button>
+      </div>
+      <input type="file" id="photo-camera" accept="image/*" capture="environment" hidden>
+      <input type="file" id="photo-library" accept="image/*" multiple hidden>
+      <div id="photo-preview" class="preview"></div>
+    </div>
 
     <button id="visit-save" class="btn btn--wide">この訪問を記録する</button>
 

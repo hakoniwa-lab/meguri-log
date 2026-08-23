@@ -15,6 +15,7 @@
     map: null,
     here: null,          // 現在地マーカー
     selected: null,      // 記録シートで開いている spot
+    pending: [],         // 保存前に添付した写真 [{blob, url}]
   };
 
   const $ = (sel) => document.querySelector(sel);
@@ -154,7 +155,7 @@
     $('#sheet-title').textContent = feat.properties.name;
     $('#visit-date').value = new Date().toISOString().slice(0, 10);
     $('#visit-memo').value = '';
-    $('#visit-photo').value = '';
+    clearPending();
     $('#sheet-coords').textContent = coords
       ? `現在地: ${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)}`
       : '座標は記録されません（地図から選択）';
@@ -166,6 +167,7 @@
   function closeSheet() {
     $('#sheet').classList.remove('is-open');
     state.selected = null;
+    clearPending();
   }
 
   async function renderVisitList(spotId) {
@@ -214,18 +216,69 @@
     }
   }
 
+  // ---- 添付写真（保存前の一時置き場）----
+  function clearPending() {
+    state.pending.forEach((p) => URL.revokeObjectURL(p.url));
+    state.pending = [];
+    const c = $('#photo-camera'); if (c) c.value = '';
+    const l = $('#photo-library'); if (l) l.value = '';
+    renderPending();
+  }
+
+  function renderPending() {
+    const box = $('#photo-preview');
+    if (!box) return;
+    box.innerHTML = '';
+    state.pending.forEach((p, i) => {
+      const cell = document.createElement('div');
+      cell.className = 'preview__item';
+      const img = document.createElement('img');
+      img.src = p.url;
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'preview__del';
+      del.textContent = '×';
+      del.setAttribute('aria-label', 'この写真を外す');
+      del.addEventListener('click', () => {
+        URL.revokeObjectURL(p.url);
+        state.pending.splice(i, 1);
+        renderPending();
+      });
+      cell.appendChild(img);
+      cell.appendChild(del);
+      box.appendChild(cell);
+    });
+  }
+
+  async function addPending(fileList) {
+    for (const f of fileList) {
+      if (!f || !f.type.startsWith('image/')) continue;
+      const blob = await shrinkImage(f, 1600, 0.82);
+      state.pending.push({ blob, url: URL.createObjectURL(blob) });
+    }
+    renderPending();
+  }
+
   function initSheet() {
     $('#sheet-close').addEventListener('click', closeSheet);
     $('#sheet-backdrop').addEventListener('click', closeSheet);
+
+    // 端末差を避けるため、カメラとライブラリの入口を分けて明示的に開く
+    $('#btn-camera').addEventListener('click', () => $('#photo-camera').click());
+    $('#btn-library').addEventListener('click', () => $('#photo-library').click());
+    $('#photo-camera').addEventListener('change', async (e) => {
+      await addPending(e.target.files); e.target.value = '';
+    });
+    $('#photo-library').addEventListener('change', async (e) => {
+      await addPending(e.target.files); e.target.value = '';
+    });
 
     $('#visit-save').addEventListener('click', async () => {
       if (!state.selected) return;
       const spotId = spotIdOf(state.selected.code);
       const photoIds = [];
-      const files = $('#visit-photo').files;
-      for (const f of files) {
-        const blob = await shrinkImage(f, 1600, 0.82);
-        photoIds.push(await Store.putPhoto(blob));
+      for (const p of state.pending) {
+        photoIds.push(await Store.putPhoto(p.blob));
       }
       await Store.addVisit({
         spotId,
@@ -240,7 +293,7 @@
       refreshMap(); renderList(); renderProgress();
       await renderVisitList(spotId);
       $('#visit-memo').value = '';
-      $('#visit-photo').value = '';
+      clearPending();
       toast(state.selected.name + ' を記録しました');
     });
   }
