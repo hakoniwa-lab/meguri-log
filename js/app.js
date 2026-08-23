@@ -217,12 +217,27 @@
         // アプリ内カメラで撮った写真は端末のライブラリには残らない
         // （ブラウザから写真ライブラリへ書き込むAPIは存在しないため）。
         // 端末に残したい人向けに、共有シート経由の保存口をここに用意する。
-        const save = document.createElement('button');
-        save.type = 'button';
-        save.className = 'shot__save';
-        save.textContent = '端末に保存';
-        save.addEventListener('click', () => savePhotoToDevice(p, v));
-        fig.appendChild(save);
+        // 共有と保存は端末で挙動が違うので、1つのボタンにまとめない。
+        // iPhone: 共有シートに「画像を保存」が出る
+        // Android: 共有シートはアプリ一覧で「画像を保存」は無い → ダウンロードを使う
+        const acts = document.createElement('div');
+        acts.className = 'shot__acts';
+
+        const shareBtn = document.createElement('button');
+        shareBtn.type = 'button';
+        shareBtn.className = 'shot__btn';
+        shareBtn.textContent = '共有';
+        shareBtn.addEventListener('click', () => sharePhoto(p, v));
+        acts.appendChild(shareBtn);
+
+        const dlBtn = document.createElement('button');
+        dlBtn.type = 'button';
+        dlBtn.className = 'shot__btn';
+        dlBtn.textContent = '保存';
+        dlBtn.addEventListener('click', () => downloadPhoto(p, v));
+        acts.appendChild(dlBtn);
+
+        fig.appendChild(acts);
         row.appendChild(fig);
       }
       box.appendChild(row);
@@ -316,27 +331,44 @@
   // ①共有シート（実機のiOS/Androidはこれが使える。「画像を保存」でカメラロールに入る）
   // ②ダウンロード（共有が無い環境のフォールバック。iOSは"ファイル"、Androidはダウンロードへ）
   // の順で試す。
-  async function savePhotoToDevice(photo, visit) {
-    const name = `meguri-${(visit.name || 'photo')}-${visit.visitedAt || ''}.jpg`
+  function photoFileName(visit) {
+    return `meguri-${(visit.name || 'photo')}-${visit.visitedAt || ''}.jpg`
       .replace(/[\\/:*?"<>|]/g, '_');
-    const file = new File([photo.blob], name, { type: photo.type || 'image/jpeg' });
+  }
 
-    if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      try {
-        await navigator.share({ files: [file], title: visit.name || 'めぐりログ' });
-        return;
-      } catch (e) {
-        if (e && e.name === 'AbortError') return;   // ユーザーが閉じただけ
-        // 共有に失敗したらダウンロードへ落とす
-      }
+  function canSharePhoto(photo, visit) {
+    if (!navigator.canShare || !navigator.share) return false;
+    try {
+      const f = new File([photo.blob], photoFileName(visit),
+        { type: photo.type || 'image/jpeg' });
+      return navigator.canShare({ files: [f] });
+    } catch (e) { return false; }
+  }
+
+  async function sharePhoto(photo, visit) {
+    if (!canSharePhoto(photo, visit)) {
+      toast('この端末は写真の共有に対応していません。「保存」を使ってください');
+      return;
     }
+    const file = new File([photo.blob], photoFileName(visit),
+      { type: photo.type || 'image/jpeg' });
+    try {
+      await navigator.share({ files: [file], title: visit.name || 'めぐりログ' });
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;   // ユーザーが閉じただけ
+      toast('共有できませんでした。「保存」を使ってください');
+    }
+  }
 
+  function downloadPhoto(photo, visit) {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(photo.blob);
-    a.download = name;
+    a.download = photoFileName(visit);
+    document.body.appendChild(a);
     a.click();
+    a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-    toast('写真を保存しました');
+    toast('保存しました。端末の「ダウンロード」を確認してください');
   }
 
   // 写真は長辺1600pxまで縮めてから保存する。
@@ -445,11 +477,62 @@
       toast('削除しました');
     });
 
+    renderDeviceInfo();
+
     Store.estimate().then((est) => {
       if (!est) return;
       const mb = (n) => (n / 1024 / 1024).toFixed(1) + ' MB';
       $('#storage-info').textContent = `使用量の目安: ${mb(est.usage || 0)} / 空き ${mb(est.quota || 0)}`;
     });
+  }
+
+  // 端末の対応状況。写真保存がうまくいかないときの切り分けに使う。
+  function renderDeviceInfo() {
+    const box = $('#device-info');
+    if (!box) return;
+    let canFiles = false;
+    try {
+      const f = new File([new Blob(['x'], { type: 'image/jpeg' })], 't.jpg', { type: 'image/jpeg' });
+      canFiles = !!(navigator.canShare && navigator.canShare({ files: [f] }));
+    } catch (e) { canFiles = false; }
+
+    const ua = navigator.userAgent;
+    const isIOS = /iPhone|iPad|iPod/.test(ua) ||
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    const isAndroid = /Android/.test(ua);
+    const osName = isIOS ? 'iPhone / iPad' : (isAndroid ? 'Android' : 'パソコンなど');
+
+    const rows = [
+      ['端末の種類', osName],
+      ['写真の共有', canFiles ? '使えます' : '使えません'],
+      ['位置情報', ('geolocation' in navigator) ? '使えます' : '使えません'],
+      ['オフライン起動', ('serviceWorker' in navigator) ? '使えます' : '使えません'],
+    ];
+
+    let advice;
+    if (isIOS && canFiles) {
+      advice = '「共有」を押すと共有シートが開きます。その中の「画像を保存」でカメラロールに入ります。';
+    } else if (isAndroid) {
+      advice = 'Androidの共有シートには「画像を保存」という項目がありません。' +
+        '端末に残すときは「保存」を押してください。ダウンロードフォルダに入ります。' +
+        'カメラロールに確実に入れたい場合は、端末の標準カメラで撮ってから「写真から選ぶ」が確実です。';
+    } else if (!canFiles) {
+      advice = 'この端末は写真の共有に対応していません。「保存」を使ってください。';
+    } else {
+      advice = '「共有」か「保存」のどちらかで写真を取り出せます。';
+    }
+
+    box.innerHTML = '';
+    rows.forEach(([k, v]) => {
+      const r = document.createElement('div');
+      r.className = 'diag__row';
+      r.innerHTML = `<span>${k}</span><b>${v}</b>`;
+      box.appendChild(r);
+    });
+    const p = document.createElement('p');
+    p.className = 'diag__advice';
+    p.textContent = advice;
+    box.appendChild(p);
   }
 
   // ---------------------------------------------------------------
