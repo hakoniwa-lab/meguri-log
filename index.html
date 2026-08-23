@@ -105,7 +105,11 @@
 
     <label class="field">
       <span>写真</span>
-      <input type="file" id="visit-photo" accept="image/*" capture="environment" multiple>
+      <!-- capture属性は付けない。付けるとカメラが直接起動してしまい、
+           保存済みの写真から選べなくなる（御朱印を後日撮る場合に困る）。
+           外しておくと、OSが「撮影する／ライブラリから選ぶ」を出してくれる。 -->
+      <input type="file" id="visit-photo" accept="image/*" multiple>
+      <small class="muted">撮影のほか、保存済みの写真からも選べます。複数枚まとめて追加できます。</small>
     </label>
 
     <button id="visit-save" class="btn btn--wide">この訪問を記録する</button>
