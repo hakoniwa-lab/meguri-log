@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>めぐりログ | HAKONIWA LAB</title>
+<meta name="description" content="行った都道府県を地図で塗りつぶして記録する無料アプリ。現在地から今いる都道府県を自動で判定できます。記録は端末の中だけに保存され、会員登録もログインも不要です。">
+<link rel="canonical" href="https://hakoniwa-lab.github.io/meguri-log/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="めぐりログ | HAKONIWA LAB">
+<meta property="og:description" content="行った都道府県を地図で塗りつぶして記録する無料アプリ。現在地から今いる都道府県を自動判定。記録は端末内にだけ保存されます。">
+<meta property="og:url" content="https://hakoniwa-lab.github.io/meguri-log/">
+<meta name="theme-color" content="#2c3e62">
+<link rel="icon" href="./icons/favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="./icons/icon-192.png">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="stylesheet" href="./vendor/leaflet.css">
+<link rel="stylesheet" href="./css/style.css">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"会員登録やログインは必要ですか？","acceptedAnswer":{"@type":"Answer","text":"必要ありません。記録はお使いの端末の中だけに保存され、サーバーへの送信は行っていません。"}},{"@type":"Question","name":"位置情報は何に使われますか？","acceptedAnswer":{"@type":"Answer","text":"現在地から「今どの都道府県にいるか」を判定するためだけに使います。判定は端末の中で行われ、位置情報が外部に送信されることはありません。"}},{"@type":"Question","name":"機種変更したら記録は消えますか？","acceptedAnswer":{"@type":"Answer","text":"消えます。記録は端末内に保存されるためです。設定画面の「書き出し」でファイルを保存しておけば、新しい端末の「読み込み」で復元できます。"}},{"@type":"Question","name":"写真も保存できますか？","acceptedAnswer":{"@type":"Answer","text":"できます。記録するときに写真を添付でき、端末内に保存されます。保存時に長辺1600pxまで自動で縮小し、容量を使いすぎないようにしています。"}}]}</script>
+</head>
+<body>
+
+<header class="hero">
+  <span class="hero__mark"><a href="https://hakoniwa-lab.github.io/">HAKONIWA LAB</a></span>
+  <h1 class="hero__title">めぐりログ</h1>
+  <p class="hero__lead">行った場所を、地図に残していく。</p>
+  <div class="progress">
+    <div class="progress__bar"><span id="progress-bar"></span></div>
+    <p class="progress__text" id="progress-text">0 / 47 制覇（0%）</p>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="tab is-active" data-tab="map">地図</button>
+  <button class="tab" data-tab="list">一覧</button>
+  <button class="tab" data-tab="settings">設定</button>
+</nav>
+
+<main>
+  <section class="panel is-active" id="panel-map">
+    <div id="map"></div>
+    <button id="btn-here" class="fab">現在地</button>
+    <p class="hint">都道府県をタップすると記録できます。</p>
+  </section>
+
+  <section class="panel" id="panel-list">
+    <div id="list" class="list"></div>
+  </section>
+
+  <section class="panel" id="panel-settings">
+    <div class="card">
+      <h2>データの保存について</h2>
+      <p>記録は<b>この端末の中だけ</b>に保存されています。サーバーには何も送っていません。</p>
+      <p class="warn">ブラウザのデータを削除したり、機種変更をすると記録は消えます。ときどき「書き出し」でバックアップを取ってください。</p>
+      <p class="muted" id="storage-info"></p>
+    </div>
+
+    <div class="card">
+      <h2>バックアップ</h2>
+      <div class="btns">
+        <button id="btn-export" class="btn">書き出し（JSON）</button>
+        <button id="btn-import" class="btn btn--sub">読み込み</button>
+        <input type="file" id="import-file" accept="application/json" hidden>
+      </div>
+      <p class="muted">書き出しファイルには写真も含まれます。</p>
+    </div>
+
+    <div class="card">
+      <h2>すべて削除</h2>
+      <button id="btn-clear" class="btn btn--danger">記録をすべて削除</button>
+      <p class="muted">取り消せません。先にバックアップを取ってください。</p>
+    </div>
+
+    <div class="card">
+      <h2>これから追加する予定</h2>
+      <ul class="todo">
+        <li>市区町村の制覇（約1,700）</li>
+        <li>日本100名城・続日本100名城</li>
+        <li>鉄道駅（現存・廃駅）</li>
+        <li>御朱印の記録</li>
+        <li>複数端末での同期</li>
+      </ul>
+    </div>
+  </section>
+</main>
+
+<div id="sheet" class="sheet">
+  <div id="sheet-backdrop" class="sheet__backdrop"></div>
+  <div class="sheet__body">
+    <div class="sheet__head">
+      <h2 id="sheet-title">—</h2>
+      <button id="sheet-close" class="iconbtn" aria-label="閉じる">×</button>
+    </div>
+    <p class="muted" id="sheet-coords"></p>
+
+    <label class="field">
+      <span>訪れた日</span>
+      <input type="date" id="visit-date">
+    </label>
+
+    <label class="field">
+      <span>メモ</span>
+      <textarea id="visit-memo" rows="2" placeholder="何をした・何を見た など"></textarea>
+    </label>
+
+    <label class="field">
+      <span>写真</span>
+      <input type="file" id="visit-photo" accept="image/*" capture="environment" multiple>
+    </label>
+
+    <button id="visit-save" class="btn btn--wide">この訪問を記録する</button>
+
+    <h3 class="sheet__sub">これまでの記録</h3>
+    <div id="visit-list"></div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<footer class="foot">
+  <p>地図データ &copy; <a href="https://www.openstreetmap.org/copyright" rel="noopener">OpenStreetMap</a> contributors</p>
+  <p><a href="https://hakoniwa-lab.github.io/">HAKONIWA LAB</a></p>
+</footer>
+
+<script src="./vendor/leaflet.js"></script>
+<script src="./js/storage.js"></script>
+<script src="./js/app.js"></script>
+</body>
+</html>
