@@ -60,7 +60,8 @@
       },
     }).addTo(state.map);
 
-    $('#btn-here').addEventListener('click', locate);
+    $('#btn-here').addEventListener('click', () => locate(false));
+    $('#btn-here-record').addEventListener('click', () => locate(true));
   }
 
   function styleFor(feat) {
@@ -80,35 +81,45 @@
   // ---------------------------------------------------------------
   // 現在地 → いまいる都道府県を判定
   // ---------------------------------------------------------------
-  function locate() {
-    const btn = $('#btn-here');
+  // openRecord=false … 現在地へ地図を動かすだけ（記録シートは開かない）
+  // openRecord=true  … 現在地を判定して、その都道府県の記録シートを開く
+  function locate(openRecord) {
+    const btn = openRecord ? $('#btn-here-record') : $('#btn-here');
+    const label = btn.textContent;
     if (!navigator.geolocation) {
       toast('この端末では現在地を取得できません');
       return;
     }
     btn.disabled = true;
     btn.textContent = '取得中…';
+    const restore = () => { btn.disabled = false; btn.textContent = label; };
+
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        btn.disabled = false;
-        btn.textContent = '現在地';
+        restore();
         const { latitude: lat, longitude: lng } = pos.coords;
         if (state.here) state.map.removeLayer(state.here);
         state.here = L.circleMarker([lat, lng], {
           radius: 8, color: '#c0392b', fillColor: '#e74c3c', fillOpacity: 0.9, weight: 2,
         }).addTo(state.map);
-        state.map.setView([lat, lng], 9);
+        // 記録するときは県全体が見える程度、移動だけのときは少し寄る
+        state.map.setView([lat, lng], openRecord ? 9 : 11);
 
         const feat = findPrefectureAt(lat, lng);
-        if (feat) {
+        if (!feat) {
+          toast('現在地は日本の都道府県の範囲外のようです');
+          return;
+        }
+        if (openRecord) {
           openSheet(feat.properties.code, { lat, lng });
         } else {
-          toast('現在地は日本の都道府県の範囲外のようです');
+          // 記録は割り込ませない。今どこにいるかだけ知らせる。
+          const done = state.visited.has(spotIdOf(feat.properties.code));
+          toast(feat.properties.name + (done ? '（記録済み）' : '（未記録）'));
         }
       },
       (err) => {
-        btn.disabled = false;
-        btn.textContent = '現在地';
+        restore();
         const msg = err.code === 1
           ? '位置情報の利用が許可されていません。ブラウザの設定から許可してください'
           : '現在地を取得できませんでした';

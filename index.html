@@ -39,8 +39,13 @@
 <main>
   <section class="panel is-active" id="panel-map">
     <div id="map"></div>
-    <button id="btn-here" class="fab">現在地</button>
-    <p class="hint">都道府県をタップすると記録できます。</p>
+    <!-- 「移動するだけ」と「記録する」は別の操作。
+         地図で他の場所を見ているときに現在地へ戻りたいだけ、という場面が多いため分けている。 -->
+    <div class="fabs">
+      <button id="btn-here" class="fab fab--sub">現在地へ</button>
+      <button id="btn-here-record" class="fab">ここを記録</button>
+    </div>
+    <p class="hint">都道府県をタップしても記録できます。</p>
   </section>
 
   <section class="panel" id="panel-list">
