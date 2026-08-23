@@ -1,7 +1,11 @@
 /* めぐりログ — Service Worker
    圏外の山の中の城跡や神社でも記録できるよう、アプリ本体と地図データを端末に置く。
    地図タイルはオンライン時のみ。閲覧済みタイルは一定枚数だけ残す。 */
-const VERSION = 'v1';
+/* ★デプロイ時の必須作業★
+   index.html / css / js / data を変更したら、必ず VERSION を上げること。
+   上げないと、既に開いたことのある端末は古いキャッシュを返し続け、
+   修正がいつまでも届かない（Service Workerは sw.js 自体が変わったときだけ再インストールされる）。 */
+const VERSION = 'v2';
 const SHELL = 'meguri-shell-' + VERSION;
 const TILES = 'meguri-tiles-' + VERSION;
 const TILE_LIMIT = 400;

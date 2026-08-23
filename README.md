@@ -39,6 +39,19 @@ app/
    同じ `spot` として扱う。網羅リストが存在しない対象（御朱印・廃駅など）もこれで扱える。
 4. **写真は長辺1600pxに縮小して保存。** 原寸だと1枚5MB前後になり容量を食い潰す。
 
+
+## デプロイ時の必須作業（忘れると修正が届かない）
+
+`index.html` / `css` / `js` / `data` のどれかを変えたら、**`sw.js` の `VERSION` を必ず上げる**。
+
+Service Worker は `sw.js` 自体が変わったときにしか再インストールされない。
+VERSIONを据え置くと、一度でも開いたことのある端末は古いキャッシュを返し続け、
+**修正がいつまでも反映されない**。実際に初回デプロイ直後に踏んだ。
+
+```
+const VERSION = 'v2';   // ← 変更のたびに v3, v4 … と上げる
+```
+
 ## 地図データについて
 
 `data/prefectures.geojson` は [dataofjapan/land](https://github.com/dataofjapan/land) の
