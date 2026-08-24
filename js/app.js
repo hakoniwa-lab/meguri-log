@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v12';
+  const APP_VERSION = 'v13';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -29,6 +29,21 @@
     { key: 'kyu',  label: '九州・沖縄', min: 40, max: 47 },
   ];
 
+  // 訪問の目的タグ。「何で行ったか」を一目で分かるようにするためのもの。
+  // 項目を増やすと記録が億劫になるので、1つだけ・任意入力にしている。
+  const TAGS = [
+    { key: '',      mark: '📍', label: '未設定' },
+    { key: 'work',  mark: '💼', label: '仕事' },
+    { key: 'play',  mark: '🎡', label: '遊び' },
+    { key: 'castle',mark: '🏯', label: '城' },
+    { key: 'statn', mark: '🚉', label: '駅' },
+    { key: 'shrine',mark: '⛩️', label: '神社・寺' },
+    { key: 'food',  mark: '🍽️', label: '食事' },
+    { key: 'home',  mark: '🏠', label: '帰省' },
+    { key: 'other', mark: '✳️', label: 'その他' },
+  ];
+  const tagOf = (k) => TAGS.find((t) => t.key === (k || '')) || TAGS[0];
+
   const LEVELS = {
     pref: { label: '都道府県', file: './data/prefectures.geojson', total: 47 },
     city: { label: '市区町村', file: './data/municipalities.geojson', total: 1902 },
@@ -45,9 +60,11 @@
     visited: { pref: new Set(), city: new Set() },
     chomeCount: 0,
     loadingCity: false,
+    pins: null,         // 記録ピンのレイヤー
+    pinsOn: true,
     region: 'all',
     editing: null,      // 編集中の記録（nullなら新規記録）
-    histMode: 'visits', // 記録タブの表示（visits / chome）
+    histMode: 'visits', // 記録タブの表示（visits / chome / stats）
     histShown: 0,
   };
 
@@ -128,6 +145,12 @@
     }).addTo(state.map);
 
     drawLayer();
+    renderPins();
+    $('#btn-pins').addEventListener('click', () => {
+      state.pinsOn = !state.pinsOn;
+      $('#btn-pins').classList.toggle('is-off', !state.pinsOn);
+      renderPins();
+    });
     $('#btn-here').addEventListener('click', () => locate(false));
     $('#btn-here-record').addEventListener('click', () => locate(true));
   }
@@ -160,6 +183,46 @@
 
   function refreshMap() {
     if (state.layer) state.layer.setStyle(styleFor);
+    renderPins();
+  }
+
+  // 記録のピン。座標を持つ記録だけを、タグの記号つきで置く。
+  async function renderPins() {
+    if (!state.map) return;
+    if (state.pins) { state.map.removeLayer(state.pins); state.pins = null; }
+    if (!state.pinsOn) return;
+
+    const all = await Store.getAllVisits();
+    const withCoords = all.filter((v) => v.coords && typeof v.coords.lat === 'number');
+    if (!withCoords.length) return;
+
+    const group = L.layerGroup();
+    for (const v of withCoords) {
+      const t = tagOf(v.tag);
+      const icon = L.divIcon({
+        className: 'pin',
+        html: '<span class="pin__mark">' + t.mark + '</span>',
+        iconSize: [34, 34],
+        iconAnchor: [17, 34],
+        popupAnchor: [0, -30],
+      });
+      const m = L.marker([v.coords.lat, v.coords.lng], { icon });
+      const lines = [
+        '<b>' + escapeHtml(v.name || '') + '</b>',
+        escapeHtml(v.visitedAt || '') + (t.key ? ' ・ ' + t.label : ''),
+      ];
+      if (v.address && v.address.lv01Nm) lines.push(escapeHtml(v.address.lv01Nm));
+      if (v.memo) lines.push(escapeHtml(v.memo));
+      m.bindPopup(lines.join('<br>'));
+      group.addLayer(m);
+    }
+    state.pins = group.addTo(state.map);
+  }
+
+  function escapeHtml(t) {
+    return String(t).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
   }
 
   // 2MBあるので起動時には読まない。市区町村に切り替えたときだけ取りに行く。
@@ -218,14 +281,29 @@
         }).addTo(state.map);
         state.map.setView([lat, lng], openRecord ? (state.level === 'city' ? 11 : 9) : 12);
 
-        const feat = findAt(state.level, lat, lng);
-        if (!feat) {
-          toast('現在地は日本の範囲外のようです');
+        if (openRecord) {
+          // ★常に市区町村（いちばん細かい単位）で記録する★
+          // 都道府県の表示のまま記録すると市区町村側に何も残らなかった。
+          // 市区町村さえ記録すれば都道府県は集計で埋まるので、一度で両方そろう。
+          const ok = await ensureLevelData('city');
+          const cityFeat = ok ? findAt('city', lat, lng) : null;
+          if (cityFeat) {
+            openSheet('city', cityFeat.properties.code, { lat, lng });
+            return;
+          }
+          // 市区町村を特定できなかったとき（読み込み失敗・離島など）は表示中の単位で記録する
+          const fb = findAt(state.level, lat, lng);
+          if (fb) openSheet(state.level, fb.properties.code, { lat, lng });
+          else toast('現在地は日本の範囲外のようです');
           return;
         }
-        if (openRecord) {
-          openSheet(state.level, feat.properties.code, { lat, lng });
-        } else {
+
+        {
+          const feat = findAt(state.level, lat, lng);
+          if (!feat) {
+            toast('現在地は日本の範囲外のようです');
+            return;
+          }
           const done = state.visited[state.level].has(spotIdOf(state.level, feat.properties.code));
           toast(feat.properties.name + (done ? '（記録済み）' : '（未記録）'));
         }
@@ -296,9 +374,11 @@
 
     $('#sheet-title').textContent = feat.properties.name;
     $('#sheet-sub').textContent = LEVELS[level].label +
-      (feat.properties.pref ? ' / ' + feat.properties.pref : '');
+      (feat.properties.pref ? ' / ' + feat.properties.pref : '') +
+      (level === 'city' && feat.properties.pref ? '（都道府県もあわせて記録されます）' : '');
     $('#visit-date').value = new Date().toISOString().slice(0, 10);
     $('#visit-memo').value = '';
+    setTagValue('');
     clearPending();
     $('#sheet-coords').textContent = coords
       ? `現在地: ${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)}`
@@ -342,7 +422,7 @@
       row.className = 'visit';
       const head = document.createElement('div');
       head.className = 'visit__head';
-      head.innerHTML = `<b>${v.visitedAt}</b>`;
+      head.innerHTML = `<b>${tagOf(v.tag).mark} ${v.visitedAt}</b>`;
       const del = document.createElement('button');
       del.className = 'linkbtn';
       del.textContent = '削除';
@@ -453,6 +533,7 @@
 
     $('#visit-date').value = visit.visitedAt || new Date().toISOString().slice(0, 10);
     $('#visit-memo').value = visit.memo || '';
+    setTagValue(visit.tag || '');
 
     // 既存の写真は existingId 付きで pending に載せる。
     // 触らなければ同じIDのまま保存され、×を押したものだけが外れる。
@@ -481,7 +562,33 @@
     renderPending();
   }
 
+  // ---- 目的タグ ----
+  function initTagPicker() {
+    const box = $('#tag-picker');
+    if (!box || box.childElementCount) return;
+    TAGS.forEach((t) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'tagbtn' + (t.key === '' ? ' is-active' : '');
+      b.dataset.tag = t.key;
+      b.innerHTML = '<span>' + t.mark + '</span>' + t.label;
+      b.addEventListener('click', () => setTagValue(t.key));
+      box.appendChild(b);
+    });
+  }
+
+  function setTagValue(key) {
+    $$('#tag-picker .tagbtn').forEach((b) =>
+      b.classList.toggle('is-active', b.dataset.tag === (key || '')));
+  }
+
+  function getTagValue() {
+    const on = $('#tag-picker .tagbtn.is-active');
+    return on ? on.dataset.tag : '';
+  }
+
   function initSheet() {
+    initTagPicker();
     $('#sheet-close').addEventListener('click', closeSheet);
     $('#sheet-backdrop').addEventListener('click', closeSheet);
 
@@ -521,6 +628,7 @@
         await Store.updateVisit(Object.assign({}, v, {
           visitedAt: $('#visit-date').value || v.visitedAt,
           memo: $('#visit-memo').value.trim(),
+          tag: getTagValue(),
           photoIds,
           updatedAt: new Date().toISOString(),
         }));
@@ -531,6 +639,7 @@
           name: sel.name,
           visitedAt: $('#visit-date').value || new Date().toISOString().slice(0, 10),
           memo: $('#visit-memo').value.trim(),
+          tag: getTagValue(),
           coords: sel.coords,
           address: sel.address,
           photoIds,
@@ -748,6 +857,7 @@
     const all = await Store.getAllVisits();
 
     if (state.histMode === 'chome') { renderChomeList(box, all); return; }
+    if (state.histMode === 'stats') { renderStats(box, all); return; }
 
     const q = (($('#hist-filter') || {}).value || '').trim();
     const photoOnly = !!(($('#hist-photo-only') || {}).checked);
@@ -779,10 +889,28 @@
       return;
     }
 
+    // 月が変わるところに見出しを挟む。件数が増えたときに時期で辿れるようにするため。
+    let lastMonth = null;
+    const monthOf = function (v) { return (v.visitedAt || '').slice(0, 7); };
     const draw = async function (before) {
       const frag = document.createDocumentFragment();
       const slice = visits.slice(state.histShown, state.histShown + HIST_PAGE);
-      for (const v of slice) frag.appendChild(await makeHistCard(v));
+      for (const v of slice) {
+        const mo = monthOf(v);
+        if (mo && mo !== lastMonth) {
+          const h = document.createElement('div');
+          h.className = 'group';
+          const cnt = visits.filter(function (x) { return monthOf(x) === mo; }).length;
+          const sp = document.createElement('span');
+          sp.textContent = mo.replace('-', '年') + '月';
+          const sm = document.createElement('small');
+          sm.textContent = cnt + '件';
+          h.appendChild(sp); h.appendChild(sm);
+          frag.appendChild(h);
+          lastMonth = mo;
+        }
+        frag.appendChild(await makeHistCard(v));
+      }
       state.histShown += slice.length;
       if (before) box.insertBefore(frag, before); else box.appendChild(frag);
     };
@@ -808,7 +936,7 @@
     const head = document.createElement('div');
     head.className = 'hcard__head';
     const b = document.createElement('b');
-    b.textContent = v.name || '';
+    b.textContent = tagOf(v.tag).mark + ' ' + (v.name || '');
     const sm = document.createElement('small');
     sm.textContent = v.visitedAt || '';
     head.appendChild(b);
@@ -816,7 +944,9 @@
     card.appendChild(head);
 
     const label = LEVELS[v.category] ? LEVELS[v.category].label : (v.category || '');
-    const metaText = [label, v.address && v.address.lv01Nm].filter(Boolean).join(' ・ ');
+    const tg = tagOf(v.tag);
+    const metaText = [label, tg.key ? tg.label : null, v.address && v.address.lv01Nm]
+      .filter(Boolean).join(' ・ ');
     if (metaText) {
       const meta = document.createElement('p');
       meta.className = 'hcard__meta';
@@ -924,6 +1054,79 @@
     }
   }
 
+  // まとめ。集めたものが数字で見えると続けやすくなる。
+  function renderStats(box, all) {
+    $('#hist-summary').textContent = '';
+    box.innerHTML = '';
+    if (!all.length) {
+      box.innerHTML = '<p class="muted" style="padding:12px">まだ記録がありません。</p>';
+      return;
+    }
+
+    const photos = all.reduce(function (n, v) { return n + (v.photoIds || []).length; }, 0);
+    const chome = new Set();
+    const months = new Map();
+    const tags = new Map();
+    let withCoords = 0;
+    let first = null, last = null;
+    for (const v of all) {
+      if (v.address && v.address.lv01Nm) chome.add((v.address.muniCd || '') + '/' + v.address.lv01Nm);
+      const mo = (v.visitedAt || '').slice(0, 7);
+      if (mo) months.set(mo, (months.get(mo) || 0) + 1);
+      const tk = v.tag || '';
+      tags.set(tk, (tags.get(tk) || 0) + 1);
+      if (v.coords) withCoords++;
+      const d = v.visitedAt || '';
+      if (d && (!first || d < first)) first = d;
+      if (d && (!last || d > last)) last = d;
+    }
+
+    const card = function (title, rows) {
+      const c = document.createElement('div');
+      c.className = 'card';
+      const h = document.createElement('h2');
+      h.textContent = title;
+      c.appendChild(h);
+      rows.forEach(function (r) {
+        const line = document.createElement('div');
+        line.className = 'diag__row';
+        const a = document.createElement('span'); a.textContent = r[0];
+        const b = document.createElement('b'); b.textContent = r[1];
+        line.appendChild(a); line.appendChild(b);
+        c.appendChild(line);
+      });
+      box.appendChild(c);
+      return c;
+    };
+
+    card('集めたもの', [
+      ['都道府県', state.visited.pref.size + ' / 47'],
+      ['市区町村', state.visited.city.size + ' / ' + LEVELS.city.total],
+      ['町丁目', chome.size + ' か所'],
+      ['記録', all.length + ' 件'],
+      ['写真', photos + ' 枚'],
+      ['位置つきの記録', withCoords + ' 件'],
+    ]);
+
+    if (first && last) {
+      card('期間', [['最初の記録', first], ['最新の記録', last]]);
+    }
+
+    // 目的タグの内訳（多い順・0件は出さない）
+    const tagRows = TAGS
+      .filter(function (t) { return tags.get(t.key); })
+      .sort(function (a, b) { return tags.get(b.key) - tags.get(a.key); })
+      .map(function (t) { return [t.mark + ' ' + t.label, tags.get(t.key) + ' 件']; });
+    if (tagRows.length) card('何で行ったか', tagRows);
+
+    // 月別（新しい順に12か月分）
+    const moRows = Array.from(months.entries())
+      .sort(function (a, b) { return b[0].localeCompare(a[0]); })
+      .slice(0, 12)
+      .map(function (e) { return [e[0].replace('-', '年') + '月', e[1] + ' 件']; });
+    if (moRows.length) card('月ごとの記録', moRows);
+  }
+
   function initHistory() {
     $$('#hist-modes .rgbtn').forEach(function (b) {
       b.addEventListener('click', function () {
@@ -933,6 +1136,8 @@
         });
         const only = $('#hist-photo-only').closest('.filter__only');
         if (only) only.style.display = (state.histMode === 'visits') ? '' : 'none';
+        const fil = $('#hist-filter');
+        if (fil) fil.style.display = (state.histMode === 'stats') ? 'none' : '';
         renderHistory(true);
       });
     });

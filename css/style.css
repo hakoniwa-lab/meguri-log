@@ -264,3 +264,35 @@ a{color:var(--navy)}
 }
 .hrow__name{font-weight:700; color:var(--ink)}
 .hrow small{color:var(--muted); font-size:11.5px}
+
+
+/* ---- 目的タグ ---- */
+.tags{display:flex; flex-wrap:wrap; gap:6px; margin-top:4px}
+.tagbtn{
+  appearance:none; border:1.5px solid var(--line); border-radius:99px;
+  padding:7px 12px; background:#fff; color:var(--muted);
+  font:inherit; font-size:12.5px; font-weight:700; cursor:pointer;
+  display:inline-flex; align-items:center; gap:5px; line-height:1;
+}
+.tagbtn span{font-size:15px}
+.tagbtn.is-active{border-color:var(--navy); background:var(--navy); color:#fff}
+
+
+/* ---- 記録のピン ----
+   しずく型に回転させると中の絵文字まで傾くので、円形にして下に小さな足を付ける */
+.pin{background:none; border:0}
+.pin__mark{
+  position:relative;
+  display:flex; align-items:center; justify-content:center;
+  width:32px; height:32px; border-radius:50%;
+  background:#fff; border:2px solid var(--navy);
+  box-shadow:0 2px 6px rgba(0,0,0,.35);
+  font-size:16px; line-height:1;
+}
+.pin__mark::after{
+  content:''; position:absolute; left:50%; bottom:-6px; transform:translateX(-50%);
+  border-left:5px solid transparent; border-right:5px solid transparent;
+  border-top:7px solid var(--navy);
+}
+.fab--icon{padding:10px 14px; font-size:17px}
+.fab--sub.is-off{opacity:.45}
