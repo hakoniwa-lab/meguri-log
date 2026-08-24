@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v14';
+  const APP_VERSION = 'v15';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -63,6 +63,8 @@
     loadingCity: false,
     pins: null,         // 記録ピンのレイヤー
     pinsOn: true,
+    lines: null,        // 移動の線のレイヤー
+    linesOn: true,
     region: 'all',
     openGroups: new Set(),   // 一覧で開いている都道府県
     editing: null,      // 編集中の記録（nullなら新規記録）
@@ -148,10 +150,18 @@
 
     drawLayer();
     renderPins();
+    renderDayLines();
+    $('#btn-lines').addEventListener('click', () => {
+      state.linesOn = !state.linesOn;
+      $('#btn-lines').classList.toggle('is-off', !state.linesOn);
+      renderDayLines();
+      toast(state.linesOn ? '移動の線を表示します' : '移動の線を隠します');
+    });
     $('#btn-pins').addEventListener('click', () => {
       state.pinsOn = !state.pinsOn;
       $('#btn-pins').classList.toggle('is-off', !state.pinsOn);
       renderPins();
+      toast(state.pinsOn ? '記録のピンを表示します' : '記録のピンを隠します');
     });
     $('#btn-here').addEventListener('click', () => locate(false));
     $('#btn-here-record').addEventListener('click', () => locate(true));
@@ -186,6 +196,45 @@
   function refreshMap() {
     if (state.layer) state.layer.setStyle(styleFor);
     renderPins();
+    renderDayLines();
+  }
+
+  // 移動の線。同じ日に記録した地点を、記録した順に結ぶ。
+  // 実際の道なりではない（Webでは背面で位置を取り続けられないため）。
+  // それでも「その日どこを回ったか」は十分に見える。
+  async function renderDayLines() {
+    if (!state.map) return;
+    if (state.lines) { state.map.removeLayer(state.lines); state.lines = null; }
+    if (!state.linesOn) return;
+
+    const all = await Store.getAllVisits();
+    const byDay = new Map();
+    for (const v of all) {
+      if (!(v.coords && typeof v.coords.lat === 'number')) continue;
+      const d = v.visitedAt || '';
+      if (!d) continue;
+      if (!byDay.has(d)) byDay.set(d, []);
+      byDay.get(d).push(v);
+    }
+
+    const group = L.layerGroup();
+    let drawn = 0;
+    byDay.forEach(function (items, day) {
+      if (items.length < 2) return;           // 1点だけの日は線にならない
+      // 記録した順（createdAt）に並べる。visitedAtは日付だけなので順序を持たない。
+      items.sort(function (a, b) {
+        return (a.createdAt || '').localeCompare(b.createdAt || '');
+      });
+      const pts = items.map(function (v) { return [v.coords.lat, v.coords.lng]; });
+      const line = L.polyline(pts, {
+        color: '#2c3e62', weight: 3, opacity: 0.75,
+        dashArray: '7 6', lineCap: 'round', lineJoin: 'round',
+      });
+      line.bindPopup(day + ' の移動（' + items.length + 'か所）');
+      group.addLayer(line);
+      drawn++;
+    });
+    if (drawn) state.lines = group.addTo(state.map);
   }
 
   // 記録のピン。座標を持つ記録だけを、タグの記号つきで置く。
