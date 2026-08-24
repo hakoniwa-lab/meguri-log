@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v15';
+  const APP_VERSION = 'v16';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -39,11 +39,14 @@
     { key: 'statn', mark: '🚉', label: '駅' },
     { key: 'shrine',mark: '⛩️', label: '神社' },
     { key: 'temple',mark: '🛕', label: 'お寺' },
+    { key: 'shop',  mark: '🛍️', label: '買い物' },
     { key: 'food',  mark: '🍽️', label: '食事' },
     { key: 'home',  mark: '🏠', label: '帰省' },
     { key: 'other', mark: '✳️', label: 'その他' },
   ];
   const tagOf = (k) => TAGS.find((t) => t.key === (k || '')) || TAGS[0];
+
+  const DAYS = ['月', '火', '水', '木', '金', '土', '日', '不定休'];
 
   const LEVELS = {
     pref: { label: '都道府県', file: './data/prefectures.geojson', total: 47 },
@@ -68,6 +71,7 @@
     region: 'all',
     openGroups: new Set(),   // 一覧で開いている都道府県
     editing: null,      // 編集中の記録（nullなら新規記録）
+    lastPlace: null,    // 同じ地点の前回の場所情報（引き継ぎ用）
     histMode: 'visits', // 記録タブの表示（visits / chome / stats）
     histShown: 0,
   };
@@ -430,12 +434,25 @@
     $('#visit-date').value = new Date().toISOString().slice(0, 10);
     $('#visit-memo').value = '';
     setTagValue('');
+    clearExtraFields();
     clearPending();
     $('#sheet-coords').textContent = coords
       ? `現在地: ${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)}`
       : '座標は記録されません（地図から選択）';
 
     await renderVisitList(spotIdOf(level, code));
+
+    // 同じ地点に場所の情報つきの記録があれば、引き継ぎボタンを出す
+    const past = await Store.getVisitsBySpot(spotIdOf(level, code));
+    const withPlace = past.filter((v) => v.place && v.place.name);
+    if (withPlace.length) {
+      withPlace.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+      state.lastPlace = withPlace[0].place;
+      const cp = $('#place-copy');
+      cp.hidden = false;
+      cp.textContent = '前回の情報を引き継ぐ（' + withPlace[0].place.name + '）';
+    }
+
     $('#sheet').classList.add('is-open');
 
     // 住所の取得は画面表示を待たせない（取れたら後から差し込む）
@@ -585,6 +602,10 @@
     $('#visit-date').value = visit.visitedAt || new Date().toISOString().slice(0, 10);
     $('#visit-memo').value = visit.memo || '';
     setTagValue(visit.tag || '');
+    $('#visit-amount').value = (visit.amount || visit.amount === 0) ? visit.amount : '';
+    $('#visit-revisit').checked = !!visit.revisit;
+    setRating(visit.rating || 0);
+    setPlace(visit.place || null);
 
     // 既存の写真は existingId 付きで pending に載せる。
     // 触らなければ同じIDのまま保存され、×を押したものだけが外れる。
@@ -638,8 +659,115 @@
     return on ? on.dataset.tag : '';
   }
 
+  // ---- 追加した入力欄の読み書き ----
+  function initExtraFields() {
+    // 星
+    const box = $('#visit-rating');
+    if (box && !box.childElementCount) {
+      for (let i = 1; i <= 5; i++) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'star';
+        b.dataset.v = String(i);
+        b.textContent = '☆';
+        b.addEventListener('click', () => {
+          const cur = getRating();
+          setRating(cur === i ? 0 : i);   // 同じ星をもう一度押したら解除
+        });
+        box.appendChild(b);
+      }
+    }
+    // 定休日
+    const dbox = $('#place-closed');
+    if (dbox && !dbox.childElementCount) {
+      DAYS.forEach((d) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'day' + (d === '不定休' ? ' day--wide' : '');
+        b.dataset.day = d;
+        b.textContent = d;
+        b.addEventListener('click', () => b.classList.toggle('is-on'));
+        dbox.appendChild(b);
+      });
+    }
+    // 折りたたみ
+    const tg = $('#place-toggle');
+    if (tg) {
+      tg.addEventListener('click', () => {
+        const body = $('#place-body');
+        const open = body.hasAttribute('hidden');
+        if (open) body.removeAttribute('hidden'); else body.setAttribute('hidden', '');
+        tg.classList.toggle('is-open', open);
+      });
+    }
+    // 前回の情報を引き継ぐ
+    const cp = $('#place-copy');
+    if (cp) cp.addEventListener('click', () => {
+      if (state.lastPlace) { setPlace(state.lastPlace); toast('前回の情報を引き継ぎました'); }
+    });
+  }
+
+  function setRating(n) {
+    $$('#visit-rating .star').forEach((b) => {
+      const on = Number(b.dataset.v) <= n;
+      b.classList.toggle('is-on', on);
+      b.textContent = on ? '★' : '☆';
+    });
+    $('#visit-rating').dataset.value = String(n || 0);
+  }
+  function amountValue() {
+    const v = ($('#visit-amount').value || '').trim();
+    if (!v) return null;
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  }
+
+  function getRating() { return Number(($('#visit-rating') || {}).dataset?.value || 0); }
+
+  function setPlace(p) {
+    p = p || {};
+    $('#place-name').value = p.name || '';
+    $('#place-address').value = p.address || '';
+    $('#place-tel').value = p.tel || '';
+    $('#place-hours').value = p.hours || '';
+    $('#place-web').value = p.web || '';
+    $('#place-sns').value = p.sns || '';
+    const closed = p.closed || [];
+    $$('#place-closed .day').forEach((b) => b.classList.toggle('is-on', closed.includes(b.dataset.day)));
+    // 何か入っていれば畳まずに開いておく（入力済みなのに隠れていると気づけない）
+    const any = ['name', 'address', 'tel', 'hours', 'web', 'sns'].some((k) => p[k]) || closed.length;
+    const body = $('#place-body'), tg = $('#place-toggle');
+    if (any) { body.removeAttribute('hidden'); tg.classList.add('is-open'); }
+    else { body.setAttribute('hidden', ''); tg.classList.remove('is-open'); }
+  }
+
+  function getPlace() {
+    const closed = $$('#place-closed .day.is-on').map((b) => b.dataset.day);
+    const p = {
+      name: $('#place-name').value.trim(),
+      address: $('#place-address').value.trim(),
+      tel: $('#place-tel').value.trim(),
+      hours: $('#place-hours').value.trim(),
+      web: $('#place-web').value.trim(),
+      sns: $('#place-sns').value.trim(),
+      closed,
+    };
+    const any = p.name || p.address || p.tel || p.hours || p.web || p.sns || closed.length;
+    return any ? p : null;
+  }
+
+  function clearExtraFields() {
+    $('#visit-amount').value = '';
+    $('#visit-revisit').checked = false;
+    setRating(0);
+    setPlace(null);
+    $('#place-copy').hidden = true;
+    state.lastPlace = null;
+  }
+
   function initSheet() {
     initTagPicker();
+    initExtraFields();
     $('#sheet-close').addEventListener('click', closeSheet);
     $('#sheet-backdrop').addEventListener('click', closeSheet);
 
@@ -680,6 +808,10 @@
           visitedAt: $('#visit-date').value || v.visitedAt,
           memo: $('#visit-memo').value.trim(),
           tag: getTagValue(),
+          amount: amountValue(),
+          rating: getRating(),
+          revisit: $('#visit-revisit').checked,
+          place: getPlace(),
           photoIds,
           updatedAt: new Date().toISOString(),
         }));
@@ -691,6 +823,10 @@
           visitedAt: $('#visit-date').value || new Date().toISOString().slice(0, 10),
           memo: $('#visit-memo').value.trim(),
           tag: getTagValue(),
+          amount: amountValue(),
+          rating: getRating(),
+          revisit: $('#visit-revisit').checked,
+          place: getPlace(),
           coords: sel.coords,
           address: sel.address,
           photoIds,
@@ -701,6 +837,7 @@
       await renderVisitList(spotId);
       const wasEditing = !!state.editing;
       $('#visit-memo').value = '';
+      clearExtraFields();
       clearPending();
       toast(sel.name + (wasEditing ? ' の記録を更新しました' : ' を記録しました'));
     });
@@ -946,7 +1083,8 @@
     let visits = all.filter(function (v) {
       if (photoOnly && !(v.photoIds && v.photoIds.length)) return false;
       if (!q) return true;
-      const hay = [v.name, v.memo, v.address && v.address.lv01Nm, v.visitedAt]
+      const hay = [v.name, v.memo, v.address && v.address.lv01Nm, v.visitedAt,
+                   v.place && v.place.name, v.place && v.place.address]
         .filter(Boolean).join(' ');
       return hay.includes(q);
     });
@@ -1035,11 +1173,76 @@
       card.appendChild(meta);
     }
 
+    // 店名があれば地名より目立たせる（「どこの市か」より「どの店か」で思い出すため）
+    if (v.place && v.place.name) {
+      const pn = document.createElement('p');
+      pn.className = 'hcard__place';
+      pn.textContent = v.place.name;
+      card.appendChild(pn);
+    }
+
+    const badges = document.createElement('div');
+    badges.className = 'hcard__badges';
+    if (v.rating) {
+      const r = document.createElement('span');
+      r.className = 'badge badge--star';
+      r.textContent = '★'.repeat(v.rating) + '☆'.repeat(5 - v.rating);
+      badges.appendChild(r);
+    }
+    if (v.amount || v.amount === 0) {
+      const a = document.createElement('span');
+      a.className = 'badge';
+      a.textContent = '¥' + Number(v.amount).toLocaleString('ja-JP');
+      badges.appendChild(a);
+    }
+    if (v.revisit) {
+      const rv = document.createElement('span');
+      rv.className = 'badge badge--revisit';
+      rv.textContent = 'また行きたい';
+      badges.appendChild(rv);
+    }
+    if (badges.childElementCount) card.appendChild(badges);
+
     if (v.memo) {
       const m = document.createElement('p');
       m.className = 'hcard__memo';
       m.textContent = v.memo;
       card.appendChild(m);
+    }
+
+    // 場所の詳細。電話とサイトはタップで発信・表示できるようにする。
+    if (v.place) {
+      const p = v.place;
+      const dl = document.createElement('div');
+      dl.className = 'hcard__place-info';
+      const line = function (label, value, href) {
+        if (!value) return;
+        const row = document.createElement('div');
+        const k = document.createElement('span');
+        k.textContent = label;
+        row.appendChild(k);
+        if (href) {
+          const a = document.createElement('a');
+          a.href = href;
+          a.textContent = value;
+          a.rel = 'noopener';
+          if (href.startsWith('http')) a.target = '_blank';
+          a.addEventListener('click', function (e) { e.stopPropagation(); });
+          row.appendChild(a);
+        } else {
+          const b = document.createElement('b');
+          b.textContent = value;
+          row.appendChild(b);
+        }
+        dl.appendChild(row);
+      };
+      line('住所', p.address);
+      line('電話', p.tel, p.tel ? 'tel:' + p.tel.replace(/[^0-9+]/g, '') : '');
+      line('営業', p.hours);
+      if (p.closed && p.closed.length) line('定休', p.closed.join('・'));
+      line('サイト', p.web, p.web);
+      line('SNS', p.sns, /^https?:/.test(p.sns || '') ? p.sns : '');
+      if (dl.childElementCount) card.appendChild(dl);
     }
 
     if (v.photoIds && v.photoIds.length) {
@@ -1188,6 +1391,45 @@
       ['写真', photos + ' 枚'],
       ['位置つきの記録', withCoords + ' 件'],
     ]);
+
+    // 使ったお金
+    const spent = all.reduce(function (n, v) { return n + (Number(v.amount) || 0); }, 0);
+    const spentCount = all.filter(function (v) { return Number(v.amount) > 0; }).length;
+    if (spent > 0) {
+      const byMonth = new Map();
+      all.forEach(function (v) {
+        const a = Number(v.amount) || 0;
+        if (!a) return;
+        const mo = (v.visitedAt || '').slice(0, 7);
+        if (mo) byMonth.set(mo, (byMonth.get(mo) || 0) + a);
+      });
+      const rows = [
+        ['合計', '¥' + spent.toLocaleString('ja-JP')],
+        ['記録した回数', spentCount + ' 件'],
+        ['1回あたり', '¥' + Math.round(spent / spentCount).toLocaleString('ja-JP')],
+      ];
+      Array.from(byMonth.entries())
+        .sort(function (a, b) { return b[0].localeCompare(a[0]); })
+        .slice(0, 6)
+        .forEach(function (e) {
+          rows.push([e[0].replace('-', '年') + '月', '¥' + e[1].toLocaleString('ja-JP')]);
+        });
+      card('使ったお金', rows);
+    }
+
+    // また行きたい／高評価
+    const revisit = all.filter(function (v) { return v.revisit; });
+    const rated = all.filter(function (v) { return v.rating; });
+    if (revisit.length || rated.length) {
+      const rows = [];
+      if (revisit.length) rows.push(['また行きたい', revisit.length + ' 件']);
+      if (rated.length) {
+        const avg = rated.reduce(function (n, v) { return n + v.rating; }, 0) / rated.length;
+        rows.push(['評価をつけた記録', rated.length + ' 件']);
+        rows.push(['平均評価', avg.toFixed(1) + ' / 5']);
+      }
+      card('お気に入り', rows);
+    }
 
     if (first && last) {
       card('期間', [['最初の記録', first], ['最新の記録', last]]);

@@ -157,10 +157,52 @@
       <div class="tags" id="tag-picker"></div>
     </div>
 
+    <div class="field">
+      <span>この訪問について（任意）</span>
+      <div class="row3">
+        <label class="mini">
+          <small>使った金額</small>
+          <span class="yen"><input type="number" id="visit-amount" inputmode="numeric" min="0" step="1" placeholder="0"><i>円</i></span>
+        </label>
+        <label class="mini">
+          <small>評価</small>
+          <div class="stars" id="visit-rating"></div>
+        </label>
+      </div>
+      <label class="check">
+        <input type="checkbox" id="visit-revisit"> また行きたい
+      </label>
+    </div>
+
     <label class="field">
       <span>メモ</span>
       <textarea id="visit-memo" rows="2" placeholder="何をした・何を見た など"></textarea>
     </label>
+
+    <!-- 場所の情報は「その訪問」ではなく「その場所」の属性なので分けている。
+         普段は畳んでおき、店や施設を記録するときだけ開く。 -->
+    <div class="field">
+      <button type="button" class="folder" id="place-toggle">
+        <i class="folder__caret"></i>お店・施設の情報（任意）
+      </button>
+      <div class="folder__body" id="place-body" hidden>
+        <button type="button" class="btn btn--sub btn--wide" id="place-copy" hidden>前回の情報を引き継ぐ</button>
+        <label class="mini2"><small>場所の名前</small>
+          <input type="text" id="place-name" placeholder="例: 〇〇珈琲店"></label>
+        <label class="mini2"><small>住所</small>
+          <input type="text" id="place-address" placeholder="例: 石川県金沢市…"></label>
+        <label class="mini2"><small>電話番号</small>
+          <input type="tel" id="place-tel" inputmode="tel" placeholder="例: 076-123-4567"></label>
+        <label class="mini2"><small>営業時間</small>
+          <input type="text" id="place-hours" placeholder="例: 10:00〜18:00"></label>
+        <div class="mini2"><small>定休日</small>
+          <div class="days" id="place-closed"></div></div>
+        <label class="mini2"><small>ウェブサイト</small>
+          <input type="url" id="place-web" inputmode="url" placeholder="https://"></label>
+        <label class="mini2"><small>SNS</small>
+          <input type="text" id="place-sns" placeholder="URL または @アカウント"></label>
+      </div>
+    </div>
 
     <div class="field">
       <span>写真</span>
