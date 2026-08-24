@@ -34,6 +34,7 @@
 <nav class="tabs">
   <button class="tab is-active" data-tab="map">地図</button>
   <button class="tab" data-tab="list">一覧</button>
+  <button class="tab" data-tab="history">記録</button>
   <button class="tab" data-tab="settings">設定</button>
 </nav>
 
@@ -64,6 +65,22 @@
       </label>
     </div>
     <div id="list" class="list"></div>
+  </section>
+
+  <!-- 記録タブ。地点を選ばないと記録が見えず、集めたものを見返せなかったため追加 -->
+  <section class="panel" id="panel-history">
+    <div class="regions" id="hist-modes">
+      <button class="rgbtn is-active" data-hmode="visits">訪れた記録</button>
+      <button class="rgbtn" data-hmode="chome">町丁目</button>
+    </div>
+    <div class="filter">
+      <input type="search" id="hist-filter" placeholder="地名・メモで探す">
+      <label class="filter__only">
+        <input type="checkbox" id="hist-photo-only"> 写真つき
+      </label>
+    </div>
+    <p class="hist-summary" id="hist-summary"></p>
+    <div id="history" class="list"></div>
   </section>
 
   <section class="panel" id="panel-settings">

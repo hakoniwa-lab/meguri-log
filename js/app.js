@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v11';
+  const APP_VERSION = 'v12';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -47,6 +47,8 @@
     loadingCity: false,
     region: 'all',
     editing: null,      // 編集中の記録（nullなら新規記録）
+    histMode: 'visits', // 記録タブの表示（visits / chome）
+    histShown: 0,
   };
 
   const $ = (sel) => document.querySelector(sel);
@@ -84,6 +86,7 @@
     initTabs();
     initLevelSwitch();
     initSheet();
+    initHistory();
     initSettings();
     renderList();
     renderProgress();
@@ -734,12 +737,221 @@
   }
 
   // ---------------------------------------------------------------
+  // 記録タブ（見返し）
+  // 地点を選ばないと記録が見えず、集めたものを振り返れなかったので独立させた。
+  // ---------------------------------------------------------------
+  const HIST_PAGE = 30;   // 写真を伴うので少なめに出し、「続きを表示」で伸ばす
+
+  async function renderHistory(reset) {
+    const box = $('#history');
+    if (reset) state.histShown = 0;
+    const all = await Store.getAllVisits();
+
+    if (state.histMode === 'chome') { renderChomeList(box, all); return; }
+
+    const q = (($('#hist-filter') || {}).value || '').trim();
+    const photoOnly = !!(($('#hist-photo-only') || {}).checked);
+
+    let visits = all.filter(function (v) {
+      if (photoOnly && !(v.photoIds && v.photoIds.length)) return false;
+      if (!q) return true;
+      const hay = [v.name, v.memo, v.address && v.address.lv01Nm, v.visitedAt]
+        .filter(Boolean).join(' ');
+      return hay.includes(q);
+    });
+    // 新しい順。同じ日なら後から登録したものを上に。
+    visits.sort(function (a, b) {
+      return (b.visitedAt || '').localeCompare(a.visitedAt || '') ||
+             (b.createdAt || '').localeCompare(a.createdAt || '');
+    });
+
+    const photos = all.reduce(function (n, v) { return n + (v.photoIds || []).length; }, 0);
+    $('#hist-summary').textContent = all.length
+      ? '記録 ' + all.length + '件 ・ 写真 ' + photos + '枚' +
+        ((q || photoOnly) ? '（表示 ' + visits.length + '件）' : '')
+      : '';
+
+    box.innerHTML = '';
+    if (!visits.length) {
+      box.innerHTML = all.length
+        ? '<p class="muted" style="padding:12px">該当がありません。</p>'
+        : '<p class="muted" style="padding:12px">まだ記録がありません。地図から場所をタップして記録してみてください。</p>';
+      return;
+    }
+
+    const draw = async function (before) {
+      const frag = document.createDocumentFragment();
+      const slice = visits.slice(state.histShown, state.histShown + HIST_PAGE);
+      for (const v of slice) frag.appendChild(await makeHistCard(v));
+      state.histShown += slice.length;
+      if (before) box.insertBefore(frag, before); else box.appendChild(frag);
+    };
+    await draw(null);
+
+    if (state.histShown < visits.length) {
+      const more = document.createElement('button');
+      more.className = 'btn btn--sub more';
+      more.textContent = '続きを表示（残り ' + (visits.length - state.histShown) + ' 件）';
+      more.addEventListener('click', async function () {
+        await draw(more);
+        if (state.histShown >= visits.length) more.remove();
+        else more.textContent = '続きを表示（残り ' + (visits.length - state.histShown) + ' 件）';
+      });
+      box.appendChild(more);
+    }
+  }
+
+  async function makeHistCard(v) {
+    const card = document.createElement('div');
+    card.className = 'hcard';
+
+    const head = document.createElement('div');
+    head.className = 'hcard__head';
+    const b = document.createElement('b');
+    b.textContent = v.name || '';
+    const sm = document.createElement('small');
+    sm.textContent = v.visitedAt || '';
+    head.appendChild(b);
+    head.appendChild(sm);
+    card.appendChild(head);
+
+    const label = LEVELS[v.category] ? LEVELS[v.category].label : (v.category || '');
+    const metaText = [label, v.address && v.address.lv01Nm].filter(Boolean).join(' ・ ');
+    if (metaText) {
+      const meta = document.createElement('p');
+      meta.className = 'hcard__meta';
+      meta.textContent = metaText;
+      card.appendChild(meta);
+    }
+
+    if (v.memo) {
+      const m = document.createElement('p');
+      m.className = 'hcard__memo';
+      m.textContent = v.memo;
+      card.appendChild(m);
+    }
+
+    if (v.photoIds && v.photoIds.length) {
+      const strip = document.createElement('div');
+      strip.className = 'hcard__photos';
+      for (const pid of v.photoIds) {
+        const ph = await Store.getPhoto(pid);
+        if (!ph) continue;
+        const img = document.createElement('img');
+        img.src = URL.createObjectURL(ph.blob);
+        img.addEventListener('load', function () { URL.revokeObjectURL(img.src); }, { once: true });
+        strip.appendChild(img);
+      }
+      card.appendChild(strip);
+    }
+
+    // カードから、その地点の記録シートへ直接飛べるようにする
+    card.addEventListener('click', async function () {
+      const lv = v.category;
+      if (!LEVELS[lv]) return;
+      const ok = await ensureLevelData(lv);
+      if (!ok) return;
+      const code = String(v.spotId).slice(lv.length + 1);
+      if (state.level !== lv) {
+        state.level = lv;
+        $$('.lvbtn').forEach(function (x) {
+          x.classList.toggle('is-active', x.dataset.level === lv);
+        });
+        drawLayer();
+        renderProgress();
+      }
+      switchTab('map');
+      const f = featureByCode(lv, code);
+      if (f) state.map.fitBounds(L.geoJSON(f).getBounds(), { padding: [20, 20] });
+      openSheet(lv, code);
+    });
+    return card;
+  }
+
+  // 町丁目は塗り分けができない代わりに、行った場所を一覧で見られるようにする
+  function renderChomeList(box, all) {
+    const map = new Map();
+    for (const v of all) {
+      if (!(v.address && v.address.lv01Nm)) continue;
+      const key = (v.address.muniCd || '') + '/' + v.address.lv01Nm;
+      const rec = map.get(key) || { name: v.address.lv01Nm, city: v.name || '', dates: [] };
+      rec.dates.push(v.visitedAt || '');
+      map.set(key, rec);
+    }
+    const q = (($('#hist-filter') || {}).value || '').trim();
+    let items = Array.from(map.values());
+    if (q) items = items.filter(function (it) { return (it.name + it.city).includes(q); });
+    items.sort(function (a, b) {
+      return (a.city + a.name).localeCompare(b.city + b.name, 'ja');
+    });
+
+    $('#hist-summary').textContent = map.size
+      ? '町丁目 ' + map.size + '件' + (q ? '（表示 ' + items.length + '件）' : '')
+      : '';
+
+    box.innerHTML = '';
+    if (!items.length) {
+      box.innerHTML = '<p class="muted" style="padding:12px">町丁目の記録がありません。「ここを記録」で現在地から記録すると自動で入ります（通信が必要です）。</p>';
+      return;
+    }
+    let lastCity = null;
+    for (const it of items) {
+      if (it.city !== lastCity) {
+        const h = document.createElement('div');
+        h.className = 'group';
+        const cnt = items.filter(function (x) { return x.city === it.city; }).length;
+        const sp = document.createElement('span');
+        sp.textContent = it.city;
+        const sm = document.createElement('small');
+        sm.textContent = cnt + '件';
+        h.appendChild(sp);
+        h.appendChild(sm);
+        box.appendChild(h);
+        lastCity = it.city;
+      }
+      const row = document.createElement('div');
+      row.className = 'hrow';
+      const n = document.createElement('span');
+      n.className = 'hrow__name';
+      n.textContent = it.name;
+      row.appendChild(n);
+      if (it.dates.length > 1) {
+        const t = document.createElement('small');
+        t.textContent = it.dates.length + '回';
+        row.appendChild(t);
+      }
+      box.appendChild(row);
+    }
+  }
+
+  function initHistory() {
+    $$('#hist-modes .rgbtn').forEach(function (b) {
+      b.addEventListener('click', function () {
+        state.histMode = b.dataset.hmode;
+        $$('#hist-modes .rgbtn').forEach(function (x) {
+          x.classList.toggle('is-active', x.dataset.hmode === state.histMode);
+        });
+        const only = $('#hist-photo-only').closest('.filter__only');
+        if (only) only.style.display = (state.histMode === 'visits') ? '' : 'none';
+        renderHistory(true);
+      });
+    });
+    let t = null;
+    $('#hist-filter').addEventListener('input', function () {
+      clearTimeout(t);
+      t = setTimeout(function () { renderHistory(true); }, 180);
+    });
+    $('#hist-photo-only').addEventListener('change', function () { renderHistory(true); });
+  }
+
+  // ---------------------------------------------------------------
   // タブ
   // ---------------------------------------------------------------
   function switchTab(name) {
     $$('.tab').forEach((b) => b.classList.toggle('is-active', b.dataset.tab === name));
     $$('.panel').forEach((p) => p.classList.toggle('is-active', p.id === 'panel-' + name));
     if (name === 'map' && state.map) setTimeout(() => state.map.invalidateSize(), 50);
+    if (name === 'history') renderHistory(true);
   }
 
   function initTabs() {
