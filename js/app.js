@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v16';
+  const APP_VERSION = 'v17';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -38,7 +38,7 @@
     { key: 'castle',mark: '🏯', label: '城' },
     { key: 'statn', mark: '🚉', label: '駅' },
     { key: 'shrine',mark: '⛩️', label: '神社' },
-    { key: 'temple',mark: '🛕', label: 'お寺' },
+    { key: 'temple',mark: '📿', label: 'お寺' },
     { key: 'shop',  mark: '🛍️', label: '買い物' },
     { key: 'food',  mark: '🍽️', label: '食事' },
     { key: 'home',  mark: '🏠', label: '帰省' },
@@ -47,6 +47,8 @@
   const tagOf = (k) => TAGS.find((t) => t.key === (k || '')) || TAGS[0];
 
   const DAYS = ['月', '火', '水', '木', '金', '土', '日', '不定休'];
+  const GS_WRITE = ['直書き', '書き置き'];
+  const GS_FORM = ['通常', '見開き', '切り絵'];
 
   const LEVELS = {
     pref: { label: '都道府県', file: './data/prefectures.geojson', total: 47 },
@@ -68,6 +70,10 @@
     pinsOn: true,
     lines: null,        // 移動の線のレイヤー
     linesOn: true,
+    marks: null,        // ランドマークのレイヤー
+    marksOn: false,     // 通信するので既定はオフ
+    marksLoading: false,
+    marksKey: '',       // 直近に取得した範囲（同じ範囲を二重に取りに行かない）
     region: 'all',
     openGroups: new Set(),   // 一覧で開いている都道府県
     editing: null,      // 編集中の記録（nullなら新規記録）
@@ -155,6 +161,15 @@
     drawLayer();
     renderPins();
     renderDayLines();
+    $('#btn-marks').addEventListener('click', () => {
+      state.marksOn = !state.marksOn;
+      $('#btn-marks').classList.toggle('is-off', !state.marksOn);
+      renderLandmarks(true);
+      if (!state.marksOn) toast('ランドマークを隠します');
+    });
+    // 地図を動かしたら、その範囲のランドマークを取り直す
+    state.map.on('moveend', () => { if (state.marksOn) renderLandmarks(false); });
+
     $('#btn-lines').addEventListener('click', () => {
       state.linesOn = !state.linesOn;
       $('#btn-lines').classList.toggle('is-off', !state.linesOn);
@@ -239,6 +254,153 @@
       drawn++;
     });
     if (drawn) state.lines = group.addTo(state.map);
+  }
+
+  // ---- ランドマーク（OpenStreetMapから取得）----
+  // 城・駅・神社・お寺を地図に出す。自前でデータを持たず、表示中の範囲だけ取りに行く。
+  // 公開のOverpassは混雑しやすい。1台に固執せず、順に試す。
+  const OVERPASS = [
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
+    'https://overpass.openstreetmap.ru/api/interpreter',
+    'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+  ];
+  const OVERPASS_TIMEOUT = 15000;
+  const MARK_KINDS = [
+    { key: 'castle', mark: '🏯', label: '城',   tag: 'castle',
+      q: 'nwr["historic"="castle"]' },
+    { key: 'statn',  mark: '🚉', label: '駅',   tag: 'statn',
+      q: 'nwr["railway"="station"]' },
+    { key: 'shrine', mark: '⛩️', label: '神社', tag: 'shrine',
+      q: 'nwr["amenity"="place_of_worship"]["religion"="shinto"]' },
+    { key: 'temple', mark: '📿', label: 'お寺', tag: 'temple',
+      q: 'nwr["amenity"="place_of_worship"]["religion"="buddhist"]' },
+  ];
+
+  async function fetchLandmarks(bounds) {
+    const s0 = bounds.getSouth().toFixed(4), w0 = bounds.getWest().toFixed(4);
+    const n0 = bounds.getNorth().toFixed(4), e0 = bounds.getEast().toFixed(4);
+    const bbox = `(${s0},${w0},${n0},${e0})`;
+    const body = '[out:json][timeout:25];(' +
+      MARK_KINDS.map((k) => k.q + bbox + ';').join('') +
+      ');out center tags 200;';
+
+    for (const url of OVERPASS) {
+      // fetchは放っておくと待ち続けるので、必ず打ち切る
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), OVERPASS_TIMEOUT);
+      try {
+        const r = await fetch(url, {
+          method: 'POST',
+          body: 'data=' + encodeURIComponent(body),
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          signal: ctrl.signal,
+        });
+        clearTimeout(timer);
+        if (!r.ok) continue;
+        const j = await r.json();
+        if (j && j.elements) return j.elements;
+      } catch (e) {
+        clearTimeout(timer);   // タイムアウト・CORS拒否・通信断はすべて次のミラーへ
+      }
+    }
+    return null;
+  }
+
+  function kindOf(tags) {
+    if (!tags) return null;
+    if (tags.historic === 'castle') return MARK_KINDS[0];
+    if (tags.railway === 'station') return MARK_KINDS[1];
+    if (tags.religion === 'shinto') return MARK_KINDS[2];
+    if (tags.religion === 'buddhist') return MARK_KINDS[3];
+    return null;
+  }
+
+  async function renderLandmarks(force) {
+    if (!state.map) return;
+    if (!state.marksOn) {
+      if (state.marks) { state.map.removeLayer(state.marks); state.marks = null; }
+      return;
+    }
+    // 広域だと件数が膨大になるので下限を設ける。
+    // 足りないときは文句を言うのではなく、こちらから寄せる。
+    const MIN_ZOOM = 12;
+    if (state.map.getZoom() < MIN_ZOOM) {
+      if (!force) {
+        if (state.marks) { state.map.removeLayer(state.marks); state.marks = null; }
+        return;
+      }
+      state.map.setZoom(MIN_ZOOM);
+      await new Promise((r) => setTimeout(r, 400));
+    }
+    const b = state.map.getBounds();
+    const key = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()]
+      .map((n) => n.toFixed(2)).join(',');
+    if (!force && key === state.marksKey && state.marks) return;
+    if (state.marksLoading) return;
+
+    state.marksLoading = true;
+    toast('ランドマークを探しています…');
+    const els = await fetchLandmarks(b);
+    state.marksLoading = false;
+    if (!els) {
+      toast('ランドマークを取得できませんでした。地図の提供元が混雑しているようです');
+      return;
+    }
+
+    if (state.marks) { state.map.removeLayer(state.marks); state.marks = null; }
+    state.marksKey = key;
+
+    const group = L.layerGroup();
+    let n = 0;
+    for (const el of els) {
+      const k = kindOf(el.tags);
+      if (!k) continue;
+      const lat = el.lat != null ? el.lat : (el.center && el.center.lat);
+      const lng = el.lon != null ? el.lon : (el.center && el.center.lon);
+      if (lat == null || lng == null) continue;
+      const name = (el.tags['name:ja'] || el.tags.name || '').trim();
+      if (!name) continue;
+
+      const icon = L.divIcon({
+        className: 'lmark',
+        html: '<span class="lmark__mark">' + k.mark + '</span>',
+        iconSize: [26, 26], iconAnchor: [13, 13], popupAnchor: [0, -12],
+      });
+      const m = L.marker([lat, lng], { icon, zIndexOffset: -200 });
+
+      const box = document.createElement('div');
+      const t = document.createElement('b');
+      t.textContent = name;
+      const sub = document.createElement('div');
+      sub.className = 'muted';
+      sub.style.margin = '2px 0 8px';
+      sub.textContent = k.label;
+      const btn = document.createElement('button');
+      btn.className = 'btn';
+      btn.style.width = '100%';
+      btn.textContent = 'ここを記録する';
+      btn.addEventListener('click', () => recordLandmark(name, k, lat, lng));
+      box.appendChild(t); box.appendChild(sub); box.appendChild(btn);
+      m.bindPopup(box);
+      group.addLayer(m);
+      n++;
+    }
+    state.marks = group.addTo(state.map);
+    toast(n ? 'ランドマーク ' + n + '件' : 'この範囲にはありません');
+  }
+
+  // ランドマークから記録する。市区町村を割り出し、場所の名前とタグを入れた状態で開く。
+  async function recordLandmark(name, kind, lat, lng) {
+    state.map.closePopup();
+    const ok = await ensureLevelData('city');
+    const f = ok ? findAt('city', lat, lng) : null;
+    if (!f) { toast('この地点の市区町村が分かりませんでした'); return; }
+    await openSheet('city', f.properties.code, { lat, lng });
+    setTagValue(kind.tag);
+    $('#place-name').value = name;
+    $('#place-body').removeAttribute('hidden');
+    $('#place-toggle').classList.add('is-open');
   }
 
   // 記録のピン。座標を持つ記録だけを、タグの記号つきで置く。
@@ -606,6 +768,7 @@
     $('#visit-revisit').checked = !!visit.revisit;
     setRating(visit.rating || 0);
     setPlace(visit.place || null);
+    setGoshuin(visit.goshuin || null);
 
     // 既存の写真は existingId 付きで pending に載せる。
     // 触らなければ同じIDのまま保存され、×を押したものだけが外れる。
@@ -690,6 +853,37 @@
         dbox.appendChild(b);
       });
     }
+    // 御朱印：書き方・形式は1つだけ選ぶ（重複しない項目なので排他にする）
+    const mkPicker = function (sel, items) {
+      const box = $(sel);
+      if (!box || box.childElementCount) return;
+      items.forEach(function (label) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'day day--wide';
+        b.dataset.v = label;
+        b.textContent = label;
+        b.addEventListener('click', function () {
+          const on = b.classList.contains('is-on');
+          box.querySelectorAll('.day').forEach(function (x) { x.classList.remove('is-on'); });
+          if (!on) b.classList.add('is-on');
+        });
+        box.appendChild(b);
+      });
+    };
+    mkPicker('#gs-write', GS_WRITE);
+    mkPicker('#gs-form', GS_FORM);
+
+    const gt = $('#goshuin-toggle');
+    if (gt) {
+      gt.addEventListener('click', function () {
+        const body = $('#goshuin-body');
+        const open = body.hasAttribute('hidden');
+        if (open) body.removeAttribute('hidden'); else body.setAttribute('hidden', '');
+        gt.classList.toggle('is-open', open);
+      });
+    }
+
     // 折りたたみ
     const tg = $('#place-toggle');
     if (tg) {
@@ -723,6 +917,30 @@
   }
 
   function getRating() { return Number(($('#visit-rating') || {}).dataset?.value || 0); }
+
+  function setGoshuin(g) {
+    g = g || {};
+    $('#gs-name').value = g.name || '';
+    $('#gs-limited').checked = !!g.limited;
+    $$('#gs-write .day').forEach((b) => b.classList.toggle('is-on', b.dataset.v === g.write));
+    $$('#gs-form .day').forEach((b) => b.classList.toggle('is-on', b.dataset.v === g.form));
+    const any = g.name || g.write || g.form || g.limited;
+    const body = $('#goshuin-body'), tg = $('#goshuin-toggle');
+    if (any) { body.removeAttribute('hidden'); tg.classList.add('is-open'); }
+    else { body.setAttribute('hidden', ''); tg.classList.remove('is-open'); }
+  }
+
+  function getGoshuin() {
+    const w = $('#gs-write .day.is-on');
+    const f = $('#gs-form .day.is-on');
+    const g = {
+      name: $('#gs-name').value.trim(),
+      write: w ? w.dataset.v : '',
+      form: f ? f.dataset.v : '',
+      limited: $('#gs-limited').checked,
+    };
+    return (g.name || g.write || g.form || g.limited) ? g : null;
+  }
 
   function setPlace(p) {
     p = p || {};
@@ -761,6 +979,7 @@
     $('#visit-revisit').checked = false;
     setRating(0);
     setPlace(null);
+    setGoshuin(null);
     $('#place-copy').hidden = true;
     state.lastPlace = null;
   }
@@ -812,6 +1031,7 @@
           rating: getRating(),
           revisit: $('#visit-revisit').checked,
           place: getPlace(),
+          goshuin: getGoshuin(),
           photoIds,
           updatedAt: new Date().toISOString(),
         }));
@@ -827,6 +1047,7 @@
           rating: getRating(),
           revisit: $('#visit-revisit').checked,
           place: getPlace(),
+          goshuin: getGoshuin(),
           coords: sel.coords,
           address: sel.address,
           photoIds,
@@ -1084,7 +1305,8 @@
       if (photoOnly && !(v.photoIds && v.photoIds.length)) return false;
       if (!q) return true;
       const hay = [v.name, v.memo, v.address && v.address.lv01Nm, v.visitedAt,
-                   v.place && v.place.name, v.place && v.place.address]
+                   v.place && v.place.name, v.place && v.place.address,
+                   v.goshuin && v.goshuin.name]
         .filter(Boolean).join(' ');
       return hay.includes(q);
     });
@@ -1181,6 +1403,13 @@
       card.appendChild(pn);
     }
 
+    if (v.goshuin && v.goshuin.name) {
+      const gn = document.createElement('p');
+      gn.className = 'hcard__goshuin';
+      gn.textContent = '御朱印: ' + v.goshuin.name;
+      card.appendChild(gn);
+    }
+
     const badges = document.createElement('div');
     badges.className = 'hcard__badges';
     if (v.rating) {
@@ -1200,6 +1429,15 @@
       rv.className = 'badge badge--revisit';
       rv.textContent = 'また行きたい';
       badges.appendChild(rv);
+    }
+    if (v.goshuin) {
+      const g = v.goshuin;
+      [g.write, g.form, g.limited ? '限定' : ''].filter(Boolean).forEach(function (t) {
+        const e = document.createElement('span');
+        e.className = 'badge badge--goshuin';
+        e.textContent = t;
+        badges.appendChild(e);
+      });
     }
     if (badges.childElementCount) card.appendChild(badges);
 
@@ -1415,6 +1653,24 @@
           rows.push([e[0].replace('-', '年') + '月', '¥' + e[1].toLocaleString('ja-JP')]);
         });
       card('使ったお金', rows);
+    }
+
+    // 御朱印
+    const gs = all.filter(function (v) { return v.goshuin; });
+    if (gs.length) {
+      const cnt = function (pred) { return gs.filter(pred).length; };
+      const rows = [['いただいた数', gs.length + ' 体']];
+      GS_WRITE.forEach(function (w) {
+        const n = cnt(function (v) { return v.goshuin.write === w; });
+        if (n) rows.push([w, n + ' 体']);
+      });
+      GS_FORM.forEach(function (f) {
+        const n = cnt(function (v) { return v.goshuin.form === f; });
+        if (n) rows.push([f, n + ' 体']);
+      });
+      const lim = cnt(function (v) { return v.goshuin.limited; });
+      if (lim) rows.push(['限定', lim + ' 体']);
+      card('御朱印', rows);
     }
 
     // また行きたい／高評価

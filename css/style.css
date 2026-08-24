@@ -374,3 +374,19 @@ a{color:var(--navy)}
 .hcard__place-info span{flex:0 0 44px; color:var(--muted)}
 .hcard__place-info b{font-weight:400; color:var(--ink)}
 .hcard__place-info a{color:var(--navy); word-break:break-all}
+
+
+/* ---- 御朱印 ---- */
+.hcard__goshuin{margin:4px 0 0; font-size:13px; color:var(--navy); font-weight:700}
+.badge--goshuin{background:#f3ecff; color:#5b3ea8}
+
+
+/* ---- ランドマーク（記録のピンより控えめに） ---- */
+.lmark{background:none; border:0}
+.lmark__mark{
+  display:flex; align-items:center; justify-content:center;
+  width:26px; height:26px; border-radius:50%;
+  background:rgba(255,255,255,.92); border:1.5px solid rgba(44,62,98,.45);
+  box-shadow:0 1px 3px rgba(0,0,0,.25);
+  font-size:13px; line-height:1;
+}
