@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v13';
+  const APP_VERSION = 'v14';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -37,7 +37,8 @@
     { key: 'play',  mark: '🎡', label: '遊び' },
     { key: 'castle',mark: '🏯', label: '城' },
     { key: 'statn', mark: '🚉', label: '駅' },
-    { key: 'shrine',mark: '⛩️', label: '神社・寺' },
+    { key: 'shrine',mark: '⛩️', label: '神社' },
+    { key: 'temple',mark: '🛕', label: 'お寺' },
     { key: 'food',  mark: '🍽️', label: '食事' },
     { key: 'home',  mark: '🏠', label: '帰省' },
     { key: 'other', mark: '✳️', label: 'その他' },
@@ -63,6 +64,7 @@
     pins: null,         // 記録ピンのレイヤー
     pinsOn: true,
     region: 'all',
+    openGroups: new Set(),   // 一覧で開いている都道府県
     editing: null,      // 編集中の記録（nullなら新規記録）
     histMode: 'visits', // 記録タブの表示（visits / chome / stats）
     histShown: 0,
@@ -761,12 +763,13 @@
     }
     const q = (($('#list-filter') || {}).value || '').trim();
     const onlyTodo = !!(($('#only-todo') || {}).checked);
-    const reg = REGIONS.find((r) => r.key === state.region) || REGIONS[0];
+    const reg = REGIONS.find(function (r) { return r.key === state.region; }) || REGIONS[0];
 
-    let feats = gj.features.filter((f) => {
+    const feats = gj.features.filter(function (f) {
       const pc = prefCodeOf(state.level, f.properties.code);
       if (!(pc >= reg.min && pc <= reg.max)) return false;
-      if (q && !((f.properties.name || '').includes(q) || (f.properties.pref || '').includes(q))) return false;
+      if (q && !((f.properties.name || '').includes(q) ||
+                 (f.properties.pref || '').includes(q))) return false;
       if (onlyTodo && state.visited[state.level].has(spotIdOf(state.level, f.properties.code))) return false;
       return true;
     });
@@ -776,55 +779,84 @@
       return;
     }
 
-    // 見出しで区切る。市区町村は都道府県ごと、都道府県は地方ごと。
-    const groupKey = (f) => {
-      const pc = prefCodeOf(state.level, f.properties.code);
-      if (state.level === 'city') return f.properties.pref || '';
-      const r = regionOf(pc);
-      return r ? r.label : '';
-    };
-
-    const PAGE = 400;
-    let shown = 0;
-    let lastGroup = null;
-
-    const drawChunk = (before) => {
-      const frag = document.createDocumentFragment();
-      let n = 0;
-      for (const f of feats.slice(shown)) {
-        if (n >= PAGE) break;
-        const g = groupKey(f);
-        if (g !== lastGroup) {
-          const h = document.createElement('div');
-          h.className = 'group';
-          const cnt = feats.filter((x) => groupKey(x) === g).length;
-          const done = feats.filter((x) => groupKey(x) === g &&
-            state.visited[state.level].has(spotIdOf(state.level, x.properties.code))).length;
-          h.innerHTML = `<span>${g}</span><small>${done} / ${cnt}</small>`;
-          frag.appendChild(h);
-          lastGroup = g;
+    // 都道府県の一覧は47件しかないので、そのまま地方の見出しで区切って全部出す。
+    if (state.level === 'pref') {
+      let last = null;
+      for (const f of feats) {
+        const r = regionOf(prefCodeOf('pref', f.properties.code));
+        const g = r ? r.label : '';
+        if (g !== last) {
+          box.appendChild(groupHeader(g, feats.filter(function (x) {
+            const rr = regionOf(prefCodeOf('pref', x.properties.code));
+            return (rr ? rr.label : '') === g;
+          })));
+          last = g;
         }
-        frag.appendChild(makeRow(f));
-        n++;
+        box.appendChild(makeRow(f));
       }
-      shown += n;
-      if (before) box.insertBefore(frag, before);
-      else box.appendChild(frag);
-    };
-
-    drawChunk(null);
-
-    if (shown < feats.length) {
-      const more = document.createElement('button');
-      more.className = 'btn btn--sub more';
-      more.textContent = `続きを表示（残り ${feats.length - shown} 件）`;
-      more.addEventListener('click', () => {
-        drawChunk(more);
-        if (shown >= feats.length) more.remove();
-        else more.textContent = `続きを表示（残り ${feats.length - shown} 件）`;
-      });
-      box.appendChild(more);
+      return;
     }
+
+    // 市区町村は1,902件あるので、都道府県ごとに畳んで出す。
+    // 県名だけが並ぶので「関東にどの県があるか」がひと目で分かり、
+    // 見たい県をタップしたときだけ中身が開く。
+    const byPref = new Map();
+    for (const f of feats) {
+      const k = f.properties.pref || '';
+      if (!byPref.has(k)) byPref.set(k, []);
+      byPref.get(k).push(f);
+    }
+
+    // 検索中は隠れていると見つけられないので、該当する県は自動で開く
+    const autoOpen = !!q;
+
+    byPref.forEach(function (items, pref) {
+      const opened = autoOpen || state.openGroups.has(pref);
+      const head = groupHeader(pref, items, true, opened);
+      box.appendChild(head);
+
+      const wrap = document.createElement('div');
+      wrap.className = 'group__body';
+      if (!opened) wrap.style.display = 'none';
+      else items.forEach(function (f) { wrap.appendChild(makeRow(f)); });
+      box.appendChild(wrap);
+
+      head.addEventListener('click', function () {
+        const isOpen = wrap.style.display !== 'none';
+        if (isOpen) {
+          wrap.style.display = 'none';
+          wrap.innerHTML = '';
+          state.openGroups.delete(pref);
+          head.classList.remove('is-open');
+        } else {
+          items.forEach(function (f) { wrap.appendChild(makeRow(f)); });
+          wrap.style.display = '';
+          state.openGroups.add(pref);
+          head.classList.add('is-open');
+        }
+      });
+    });
+  }
+
+  function groupHeader(label, items, foldable, opened) {
+    const h = document.createElement('div');
+    h.className = 'group' + (foldable ? ' group--fold' : '') + (opened ? ' is-open' : '');
+    const done = items.filter(function (x) {
+      return state.visited[state.level].has(spotIdOf(state.level, x.properties.code));
+    }).length;
+    const left = document.createElement('span');
+    left.className = 'group__label';
+    if (foldable) {
+      const caret = document.createElement('i');
+      caret.className = 'group__caret';
+      left.appendChild(caret);
+    }
+    left.appendChild(document.createTextNode(label));
+    const right = document.createElement('small');
+    right.textContent = done + ' / ' + items.length;
+    h.appendChild(left);
+    h.appendChild(right);
+    return h;
   }
 
   function makeRow(f) {

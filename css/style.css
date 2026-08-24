@@ -296,3 +296,17 @@ a{color:var(--navy)}
 }
 .fab--icon{padding:10px 14px; font-size:17px}
 .fab--sub.is-off{opacity:.45}
+
+
+/* ---- 一覧の折りたたみ ---- */
+.group--fold{cursor:pointer; user-select:none; -webkit-user-select:none}
+.group--fold:active{opacity:.7}
+.group__label{display:inline-flex; align-items:center; gap:7px}
+.group__caret{
+  width:0; height:0; display:inline-block;
+  border-left:6px solid var(--navy);
+  border-top:5px solid transparent; border-bottom:5px solid transparent;
+  transition:transform .15s ease;
+}
+.group--fold.is-open .group__caret{transform:rotate(90deg)}
+.group__body{margin-bottom:4px}
