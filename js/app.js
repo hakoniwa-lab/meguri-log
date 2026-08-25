@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v24';
+  const APP_VERSION = 'v25';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -1949,7 +1949,10 @@
     if (name === 'map' && state.map) setTimeout(() => state.map.invalidateSize(), 50);
     if (name === 'history') renderHistory(true);
     // 記録したあとに設定を開いたとき、バックアップの状況が古いままにならないように
-    if (name === 'settings') { renderBackupStatus(); renderPersistInfo(); renderStorageInfo(); }
+    if (name === 'settings') {
+      ensurePersistOnce().then(renderPersistInfo);
+      renderBackupStatus(); renderStorageInfo();
+    }
   }
 
   function initTabs() {
@@ -1966,6 +1969,18 @@
   // ---------------------------------------------------------------
   // 設定
   // ---------------------------------------------------------------
+  // この端末の共有シートが受け付ける形式を選ぶ。どれも通らなければ null。
+  function pickShareType(candidates) {
+    if (!navigator.canShare || !navigator.share) return null;
+    for (const c of candidates) {
+      try {
+        const probe = new File(['{}'], 'probe.' + c.ext, { type: c.type });
+        if (navigator.canShare({ files: [probe] })) return c;
+      } catch (e) { /* 次を試す */ }
+    }
+    return null;
+  }
+
   // バックアップの中身を1つ作る。共有にもファイル保存にも同じものを使う。
   async function buildBackup() {
     const data = await Store.exportAll();
@@ -1977,19 +1992,24 @@
   function initSettings() {
     // スマホでは共有シートから直接クラウドへ送れる。
     // ファイル保存だと端末の中に落ちるだけで、機種が壊れたら一緒に消える。
+    //
+    // 注意: 共有できるファイル形式はブラウザごとに違う。Android Chrome は
+    // application/json を受け付けないので、形式を決め打ちにすると
+    // Androidだけボタンが出なくなる。端末に聞いて通る形式を選ぶ。
     const shareBtn = $('#btn-share');
-    if (navigator.canShare) {
-      try {
-        const probe = new File(['{}'], 'x.json', { type: 'application/json' });
-        if (navigator.canShare({ files: [probe] })) shareBtn.hidden = false;
-      } catch (e) { /* 未対応ならファイル保存だけを出す */ }
-    }
+    const SHARE_TYPES = [
+      { ext: 'json', type: 'application/json' },
+      { ext: 'txt', type: 'text/plain' },
+    ];
+    const shareType = pickShareType(SHARE_TYPES);
+    if (shareType) shareBtn.hidden = false;
 
     shareBtn.addEventListener('click', async () => {
       const b = await buildBackup();
+      const name = b.name.replace(/\.json$/, '.' + shareType.ext);
       try {
         await navigator.share({
-          files: [new File([b.blob], b.name, { type: 'application/json' })],
+          files: [new File([b.blob], name, { type: shareType.type })],
           title: 'めぐログのバックアップ',
         });
         await Store.markBackedUp(b.counts);
@@ -1999,6 +2019,12 @@
         if (err && err.name === 'AbortError') return;   // 本人が閉じただけ
         toast('送れませんでした。「ファイルに保存」をお使いください');
       }
+    });
+
+    $('#btn-persist').addEventListener('click', async () => {
+      const r = await Store.persist();
+      await renderPersistInfo();
+      toast(r ? '保存を保護しました' : 'ブラウザに断られました。バックアップを取っておいてください');
     });
 
     $('#btn-export').addEventListener('click', async () => {
@@ -2077,12 +2103,14 @@
     });
   }
 
-  // 保存の永続化は一度頼めばよい。断られても記録は続けられるので黙って進む。
+  // 保存の永続化。断られても記録は続けられるので黙って進む。
+  // 「記録を保存したとき」だけに頼っていたため、設定を見に行っただけの人には
+  // 一度も要求されず、いつまでも未保護と表示されていた。起動時にも頼む。
   let persistAsked = false;
   function ensurePersistOnce() {
-    if (persistAsked) return;
+    if (persistAsked) return Promise.resolve();
     persistAsked = true;
-    Store.persist().then(() => { renderPersistInfo(); }).catch(() => {});
+    return Store.persist().then(() => { renderPersistInfo(); }).catch(() => {});
   }
 
   async function renderBackupStatus() {
@@ -2112,12 +2140,24 @@
     const p = await Store.persisted();
     if (p === null) { el.textContent = ''; return; }
     // 永続化はこちらから頼めるだけで、許可するかはブラウザが決める。
-    // ホーム画面に追加すると通りやすくなるので、断られたときはそれを案内する。
-    el.textContent = p
-      ? '保存は保護されています（ブラウザが勝手に消すことはありません）。'
-      : '未保護: 空き容量が足りなくなると、ブラウザが記録を消すことがあります。'
-        + 'ホーム画面に追加すると保護されやすくなります。バックアップも取っておいてください。';
-    el.classList.toggle('is-warn', !p);
+    // iOSのように、ホーム画面アプリでは実際に保持されるのにAPIがfalseを返す
+    // 環境があるため、断られた=危険とは言い切らない。
+    const installed = window.matchMedia('(display-mode: standalone)').matches
+      || window.navigator.standalone === true;
+    const btn = $('#btn-persist');
+    if (p) {
+      el.textContent = '保存は保護されています（ブラウザが勝手に消すことはありません）。';
+      if (btn) btn.hidden = true;
+    } else if (installed) {
+      el.textContent = 'ホーム画面のアプリとして開いているため、記録は通常そのまま保持されます。'
+        + 'ただしブラウザからの保証はないので、ときどきバックアップを取ってください。';
+      if (btn) btn.hidden = false;
+    } else {
+      el.textContent = '未保護: 空き容量が足りなくなると、ブラウザが記録を消すことがあります。'
+        + 'ホーム画面に追加すると保護されやすくなります。';
+      if (btn) btn.hidden = false;
+    }
+    el.classList.toggle('is-warn', !p && !installed);
   }
 
   // 端末の対応状況。写真保存がうまくいかないときの切り分けに使う。

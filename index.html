@@ -97,6 +97,7 @@
       <p>記録は<b>この端末の中だけ</b>に保存されています。サーバーには何も送っていません。</p>
       <p class="warn">ブラウザのデータを削除したり、機種変更をすると記録は消えます。ときどき「書き出し」でバックアップを取ってください。</p>
       <p class="muted" id="persist-info"></p>
+      <button id="btn-persist" class="btn btn--sub btn--slim" hidden>保存を保護する</button>
       <p class="muted" id="storage-info"></p>
     </div>
 
@@ -113,7 +114,7 @@
         <button id="btn-share" class="btn" hidden>バックアップを送る</button>
         <button id="btn-export" class="btn">ファイルに保存</button>
         <button id="btn-import" class="btn btn--sub">読み込み</button>
-        <input type="file" id="import-file" accept="application/json,.json" hidden>
+        <input type="file" id="import-file" accept="application/json,text/plain,.json,.txt" hidden>
       </div>
       <p class="muted">写真も含めて1つのファイルにまとまります。<br>
         <b>機種変更のときは</b>、古い端末で書き出したファイルを新しい端末で読み込んでください。</p>

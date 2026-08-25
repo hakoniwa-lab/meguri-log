@@ -444,3 +444,4 @@ a{color:var(--navy)}
 .bkup.is-warn{color:#a8410f}
 .bkup.is-ok{color:#2f6b3f}
 .muted.is-warn{color:#a8410f; font-weight:700}
+.btn--slim{padding:7px 14px; font-size:12.5px; margin:2px 0 8px}
