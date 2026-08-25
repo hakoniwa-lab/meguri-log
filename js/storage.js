@@ -10,7 +10,7 @@
 */
 const Store = (() => {
   const DB_NAME = 'meguri-log';
-  const DB_VERSION = 1;
+  const DB_VERSION = 2;
   let db = null;
 
   // spots  … ユーザーが自分で追加した地点（御朱印・マイナーな城跡・廃駅など）
@@ -33,6 +33,10 @@ const Store = (() => {
         }
         if (!d.objectStoreNames.contains('photos')) {
           d.createObjectStore('photos', { keyPath: 'id' });
+        }
+        // meta … 最後にバックアップを取った時点など、記録そのものではない覚え書き
+        if (!d.objectStoreNames.contains('meta')) {
+          d.createObjectStore('meta', { keyPath: 'key' });
         }
       };
       req.onsuccess = () => { db = req.result; resolve(db); };
@@ -192,6 +196,49 @@ const Store = (() => {
         spots: (data.spots || []).length,
         photos: (data.photos || []).length,
       };
+    },
+
+    // ---- 覚え書き（meta） ----
+    async getMeta(key) {
+      const r = await reqToPromise(tx(['meta'], 'readonly').objectStore('meta').get(key));
+      return r ? r.value : null;
+    },
+
+    async setMeta(key, value) {
+      const t = tx(['meta'], 'readwrite');
+      t.objectStore('meta').put({ key, value });
+      await new Promise((res, rej) => { t.oncomplete = res; t.onerror = () => rej(t.error); });
+    },
+
+    // ---- 保存の永続化 ----
+    // これを宣言しておかないと、ブラウザは容量が足りなくなったときに
+    // 断りなく記録を消すことがある。バックアップ以前の防衛線。
+    async persist() {
+      if (!navigator.storage || !navigator.storage.persist) return null;
+      try {
+        if (await navigator.storage.persisted()) return true;
+        return await navigator.storage.persist();
+      } catch (e) { return null; }
+    },
+
+    async persisted() {
+      if (!navigator.storage || !navigator.storage.persisted) return null;
+      try { return await navigator.storage.persisted(); } catch (e) { return null; }
+    },
+
+    // 最後のバックアップから記録がどれだけ増えたか
+    async backupStatus() {
+      const [visits, last] = await Promise.all([this.getAllVisits(), this.getMeta('lastBackup')]);
+      const now = visits.length;
+      if (!last) return { never: true, total: now, unsaved: now, at: null };
+      return { never: false, total: now, unsaved: Math.max(0, now - (last.visits || 0)), at: last.at };
+    },
+
+    async markBackedUp(counts) {
+      await this.setMeta('lastBackup', {
+        at: new Date().toISOString(),
+        visits: counts.visits, photos: counts.photos,
+      });
     },
 
     async clearAll() {

@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v22';
+  const APP_VERSION = 'v24';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -1232,6 +1232,9 @@
       await refreshVisited();
       refreshMap(); renderList(); renderProgress();
       await renderVisitList(spotId);
+      // 記録が入った時点で保存の永続化を要求する。ブラウザは使い込まれている
+      // アプリほど許可しやすいので、初回表示時ではなくここで頼む。
+      ensurePersistOnce();
       const wasEditing = !!state.editing;
       $('#visit-memo').value = '';
       clearExtraFields();
@@ -1945,6 +1948,8 @@
     $$('.panel').forEach((p) => p.classList.toggle('is-active', p.id === 'panel-' + name));
     if (name === 'map' && state.map) setTimeout(() => state.map.invalidateSize(), 50);
     if (name === 'history') renderHistory(true);
+    // 記録したあとに設定を開いたとき、バックアップの状況が古いままにならないように
+    if (name === 'settings') { renderBackupStatus(); renderPersistInfo(); renderStorageInfo(); }
   }
 
   function initTabs() {
@@ -1961,15 +1966,50 @@
   // ---------------------------------------------------------------
   // 設定
   // ---------------------------------------------------------------
+  // バックアップの中身を1つ作る。共有にもファイル保存にも同じものを使う。
+  async function buildBackup() {
+    const data = await Store.exportAll();
+    const name = `meguri-log-${new Date().toISOString().slice(0, 10)}.json`;
+    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+    return { data, name, blob, counts: { visits: data.visits.length, photos: data.photos.length } };
+  }
+
   function initSettings() {
+    // スマホでは共有シートから直接クラウドへ送れる。
+    // ファイル保存だと端末の中に落ちるだけで、機種が壊れたら一緒に消える。
+    const shareBtn = $('#btn-share');
+    if (navigator.canShare) {
+      try {
+        const probe = new File(['{}'], 'x.json', { type: 'application/json' });
+        if (navigator.canShare({ files: [probe] })) shareBtn.hidden = false;
+      } catch (e) { /* 未対応ならファイル保存だけを出す */ }
+    }
+
+    shareBtn.addEventListener('click', async () => {
+      const b = await buildBackup();
+      try {
+        await navigator.share({
+          files: [new File([b.blob], b.name, { type: 'application/json' })],
+          title: 'めぐログのバックアップ',
+        });
+        await Store.markBackedUp(b.counts);
+        renderBackupStatus();
+        toast('送信先を選んで保存してください');
+      } catch (err) {
+        if (err && err.name === 'AbortError') return;   // 本人が閉じただけ
+        toast('送れませんでした。「ファイルに保存」をお使いください');
+      }
+    });
+
     $('#btn-export').addEventListener('click', async () => {
-      const data = await Store.exportAll();
-      const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+      const b = await buildBackup();
       const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = `meguri-log-${new Date().toISOString().slice(0, 10)}.json`;
+      a.href = URL.createObjectURL(b.blob);
+      a.download = b.name;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      await Store.markBackedUp(b.counts);
+      renderBackupStatus();
     });
 
     $('#btn-import').addEventListener('click', () => $('#import-file').click());
@@ -1979,9 +2019,34 @@
       if (!file) return;
       try {
         const data = JSON.parse(await file.text());
+        if (!data || data.app !== 'meguri-log') {
+          throw new Error('このファイルは めぐログ の書き出しデータではありません');
+        }
+        // 何が起きるのかを先に見せる。黙って上書きされるのが一番こわい。
+        const inFile = (data.visits || []).length;
+        const inPhoto = (data.photos || []).length;
+        const now = (await Store.getAllVisits()).length;
+        const when = data.exportedAt ? data.exportedAt.slice(0, 10) : '不明';
+        const ok = confirm(
+          `読み込む内容
+`
+          + `　記録 ${inFile}件・写真 ${inPhoto}枚（${when} に書き出したファイル）
+
+`
+          + `今この端末には ${now}件 の記録があります。
+`
+          + `今の記録は消さず、ファイルの中身を追加します。
+`
+          + `同じ記録が両方にある場合は、ファイル側の内容で上書きされます。
+
+`
+          + `読み込みますか？`
+        );
+        if (!ok) { e.target.value = ''; return; }
+
         const r = await Store.importAll(data, { merge: true });
         await refreshVisited();
-        refreshMap(); renderList(); renderProgress();
+        refreshMap(); renderList(); renderProgress(); renderBackupStatus();
         toast(`読み込みました（記録${r.visits}件・写真${r.photos}枚）`);
       } catch (err) {
         toast('読み込めませんでした: ' + err.message);
@@ -1999,12 +2064,60 @@
     });
 
     renderDeviceInfo();
+    renderBackupStatus();
+    renderPersistInfo();
+    renderStorageInfo();
+  }
 
+  function renderStorageInfo() {
     Store.estimate().then((est) => {
       if (!est) return;
       const mb = (n) => (n / 1024 / 1024).toFixed(1) + ' MB';
       $('#storage-info').textContent = `使用量の目安: ${mb(est.usage || 0)} / 空き ${mb(est.quota || 0)}`;
     });
+  }
+
+  // 保存の永続化は一度頼めばよい。断られても記録は続けられるので黙って進む。
+  let persistAsked = false;
+  function ensurePersistOnce() {
+    if (persistAsked) return;
+    persistAsked = true;
+    Store.persist().then(() => { renderPersistInfo(); }).catch(() => {});
+  }
+
+  async function renderBackupStatus() {
+    const el = $('#backup-status');
+    if (!el) return;
+    const st = await Store.backupStatus();
+    el.classList.remove('is-warn', 'is-ok');
+    if (!st.total) { el.textContent = 'まだ記録がありません。'; return; }
+    if (st.never) {
+      el.textContent = `まだ一度もバックアップを取っていません（記録 ${st.total}件）。`;
+      el.classList.add('is-warn');
+      return;
+    }
+    const d = st.at.slice(0, 10);
+    if (st.unsaved > 0) {
+      el.textContent = `最後のバックアップ（${d}）から ${st.unsaved}件 増えています。`;
+      el.classList.add('is-warn');
+    } else {
+      el.textContent = `${d} にバックアップ済み（記録 ${st.total}件）。`;
+      el.classList.add('is-ok');
+    }
+  }
+
+  async function renderPersistInfo() {
+    const el = $('#persist-info');
+    if (!el) return;
+    const p = await Store.persisted();
+    if (p === null) { el.textContent = ''; return; }
+    // 永続化はこちらから頼めるだけで、許可するかはブラウザが決める。
+    // ホーム画面に追加すると通りやすくなるので、断られたときはそれを案内する。
+    el.textContent = p
+      ? '保存は保護されています（ブラウザが勝手に消すことはありません）。'
+      : '未保護: 空き容量が足りなくなると、ブラウザが記録を消すことがあります。'
+        + 'ホーム画面に追加すると保護されやすくなります。バックアップも取っておいてください。';
+    el.classList.toggle('is-warn', !p);
   }
 
   // 端末の対応状況。写真保存がうまくいかないときの切り分けに使う。

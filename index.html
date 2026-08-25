@@ -96,6 +96,7 @@
       <h2>データの保存について</h2>
       <p>記録は<b>この端末の中だけ</b>に保存されています。サーバーには何も送っていません。</p>
       <p class="warn">ブラウザのデータを削除したり、機種変更をすると記録は消えます。ときどき「書き出し」でバックアップを取ってください。</p>
+      <p class="muted" id="persist-info"></p>
       <p class="muted" id="storage-info"></p>
     </div>
 
@@ -107,12 +108,15 @@
 
     <div class="card">
       <h2>バックアップ</h2>
+      <p id="backup-status" class="bkup"></p>
       <div class="btns">
-        <button id="btn-export" class="btn">書き出し（JSON）</button>
+        <button id="btn-share" class="btn" hidden>バックアップを送る</button>
+        <button id="btn-export" class="btn">ファイルに保存</button>
         <button id="btn-import" class="btn btn--sub">読み込み</button>
-        <input type="file" id="import-file" accept="application/json" hidden>
+        <input type="file" id="import-file" accept="application/json,.json" hidden>
       </div>
-      <p class="muted">書き出しファイルには写真も含まれます。</p>
+      <p class="muted">写真も含めて1つのファイルにまとまります。<br>
+        <b>機種変更のときは</b>、古い端末で書き出したファイルを新しい端末で読み込んでください。</p>
     </div>
 
     <div class="card">
@@ -127,7 +131,6 @@
                 <li>日本100名城・続日本100名城</li>
         <li>鉄道駅（現存・廃駅）</li>
         <li>御朱印の記録</li>
-        <li>複数端末での同期</li>
       </ul>
     </div>
   </section>
