@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v17';
+  const APP_VERSION = 'v19';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -74,6 +74,11 @@
     marksOn: false,     // 通信するので既定はオフ
     marksLoading: false,
     marksKey: '',       // 直近に取得した範囲（同じ範囲を二重に取りに行かない）
+    markKinds: null,    // 表示するランドマークの種類（nullなら全部）
+    markCache: null,    // 取得済みの生データ（種類の切替は再取得せず描き直すだけ）
+    markCacheKinds: null,
+    marksPending: false,
+    marksTimer: null,
     region: 'all',
     openGroups: new Set(),   // 一覧で開いている都道府県
     editing: null,      // 編集中の記録（nullなら新規記録）
@@ -161,14 +166,25 @@
     drawLayer();
     renderPins();
     renderDayLines();
+    buildMarkKindChips();
     $('#btn-marks').addEventListener('click', () => {
       state.marksOn = !state.marksOn;
       $('#btn-marks').classList.toggle('is-off', !state.marksOn);
+      $('#mark-kinds').hidden = !state.marksOn;
       renderLandmarks(true);
       if (!state.marksOn) toast('ランドマークを隠します');
     });
     // 地図を動かしたら、その範囲のランドマークを取り直す
-    state.map.on('moveend', () => { if (state.marksOn) renderLandmarks(false); });
+    state.map.on('moveend', () => {
+      state.markCache = null;   // 範囲が変わったら取り直す
+      if (state.marksOn) renderLandmarks(false);
+    });
+
+    // 一覧にもOSMにも無い場所は、地図を長押しして自分で登録する。
+    // Leafletは長押し・右クリックの両方で contextmenu を出す。
+    state.map.on('contextmenu', (e) => {
+      recordAtPoint(e.latlng.lat, e.latlng.lng);
+    });
 
     $('#btn-lines').addEventListener('click', () => {
       state.linesOn = !state.linesOn;
@@ -281,8 +297,11 @@
     const s0 = bounds.getSouth().toFixed(4), w0 = bounds.getWest().toFixed(4);
     const n0 = bounds.getNorth().toFixed(4), e0 = bounds.getEast().toFixed(4);
     const bbox = `(${s0},${w0},${n0},${e0})`;
+    // 選んだ種類だけ問い合わせる。表示が減るだけでなく通信量と待ち時間も減る。
+    const kinds = MARK_KINDS.filter((k) => !state.markKinds || state.markKinds.has(k.key));
+    if (!kinds.length) return [];
     const body = '[out:json][timeout:25];(' +
-      MARK_KINDS.map((k) => k.q + bbox + ';').join('') +
+      kinds.map((k) => k.q + bbox + ';').join('') +
       ');out center tags 200;';
 
     for (const url of OVERPASS) {
@@ -305,6 +324,28 @@
       }
     }
     return null;
+  }
+
+  function buildMarkKindChips() {
+    const box = $('#mark-kinds');
+    if (!box || box.childElementCount) return;
+    state.markKinds = new Set(MARK_KINDS.map((k) => k.key));
+    MARK_KINDS.forEach((k) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'mkchip is-on';
+      b.dataset.kind = k.key;
+      b.innerHTML = '<span>' + k.mark + '</span>' + k.label;
+      b.addEventListener('click', () => {
+        if (state.markKinds.has(k.key)) state.markKinds.delete(k.key);
+        else state.markKinds.add(k.key);
+        b.classList.toggle('is-on', state.markKinds.has(k.key));
+        // 連続で切り替えたときに毎回取りに行かないよう、少し待ってからまとめて反映する
+        clearTimeout(state.marksTimer);
+        state.marksTimer = setTimeout(() => renderLandmarks(true), 350);
+      });
+      box.appendChild(b);
+    });
   }
 
   function kindOf(tags) {
@@ -336,16 +377,31 @@
     const b = state.map.getBounds();
     const key = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()]
       .map((n) => n.toFixed(2)).join(',');
-    if (!force && key === state.marksKey && state.marks) return;
-    if (state.marksLoading) return;
 
-    state.marksLoading = true;
-    toast('ランドマークを探しています…');
-    const els = await fetchLandmarks(b);
-    state.marksLoading = false;
-    if (!els) {
-      toast('ランドマークを取得できませんでした。地図の提供元が混雑しているようです');
-      return;
+    // 取得中に要求が来たら捨てずに覚えておき、終わったあとで最新の状態で描き直す
+    if (state.marksLoading) { state.marksPending = true; return; }
+
+    // 同じ範囲を取得済みで、選んだ種類が取得済みの範囲に収まっているなら描き直すだけでよい
+    const want = Array.from(state.markKinds || []).sort().join(',');
+    const have = state.markCacheKinds || '';
+    const subset = state.markCache && key === state.marksKey &&
+      want.split(',').filter(Boolean).every((k) => have.split(',').includes(k));
+
+    let els;
+    if (subset) {
+      els = state.markCache;
+    } else {
+      state.marksLoading = true;
+      toast('ランドマークを探しています…');
+      els = await fetchLandmarks(b);
+      state.marksLoading = false;
+      if (!els) {
+        toast('ランドマークを取得できませんでした。地図の提供元が混雑しているようです');
+        if (state.marksPending) { state.marksPending = false; renderLandmarks(true); }
+        return;
+      }
+      state.markCache = els;
+      state.markCacheKinds = want;
     }
 
     if (state.marks) { state.map.removeLayer(state.marks); state.marks = null; }
@@ -356,6 +412,7 @@
     for (const el of els) {
       const k = kindOf(el.tags);
       if (!k) continue;
+      if (state.markKinds && !state.markKinds.has(k.key)) continue;
       const lat = el.lat != null ? el.lat : (el.center && el.center.lat);
       const lng = el.lon != null ? el.lon : (el.center && el.center.lon);
       if (lat == null || lng == null) continue;
@@ -388,6 +445,28 @@
     }
     state.marks = group.addTo(state.map);
     toast(n ? 'ランドマーク ' + n + '件' : 'この範囲にはありません');
+
+    if (state.marksPending) { state.marksPending = false; renderLandmarks(true); }
+  }
+
+  // 地図で長押しした地点を記録する。市区町村と町丁目は座標から自動で決まるので、
+  // ユーザーは名前を入れるだけでよい。
+  async function recordAtPoint(lat, lng) {
+    const ok = await ensureLevelData('city');
+    const f = ok ? findAt('city', lat, lng) : null;
+    if (!f) { toast('日本の範囲外のようです'); return; }
+
+    if (state.here) state.map.removeLayer(state.here);
+    state.here = L.circleMarker([lat, lng], {
+      radius: 7, color: '#c0392b', fillColor: '#e74c3c', fillOpacity: 0.9, weight: 2,
+    }).addTo(state.map);
+
+    await openSheet('city', f.properties.code, { lat, lng });
+    // 名前を入れてもらう前提なので、場所の欄を開いてそこへ誘導する
+    $('#place-body').removeAttribute('hidden');
+    $('#place-toggle').classList.add('is-open');
+    $('#place-name').focus();
+    toast('この地点を記録します。場所の名前を入れてください');
   }
 
   // ランドマークから記録する。市区町村を割り出し、場所の名前とタグを入れた状態で開く。
@@ -1378,10 +1457,24 @@
     head.className = 'hcard__head';
     const b = document.createElement('b');
     b.textContent = tagOf(v.tag).mark + ' ' + (v.name || '');
+    const right = document.createElement('span');
+    right.className = 'hcard__right';
     const sm = document.createElement('small');
     sm.textContent = v.visitedAt || '';
+    // 記録タブから直したいとき、地図へ飛んで履歴から探し直すのは遠すぎるので、
+    // カードから1タップで編集に入れるようにする。
+    const ed = document.createElement('button');
+    ed.type = 'button';
+    ed.className = 'hcard__edit';
+    ed.textContent = '編集';
+    ed.addEventListener('click', async function (e) {
+      e.stopPropagation();
+      await openVisitForEdit(v);
+    });
+    right.appendChild(sm);
+    right.appendChild(ed);
     head.appendChild(b);
-    head.appendChild(sm);
+    head.appendChild(right);
     card.appendChild(head);
 
     const label = LEVELS[v.category] ? LEVELS[v.category].label : (v.category || '');
@@ -1518,6 +1611,25 @@
       openSheet(lv, code);
     });
     return card;
+  }
+
+  // 記録タブから直接その記録の編集を開く
+  async function openVisitForEdit(v) {
+    const lv = v.category;
+    if (!LEVELS[lv]) return;
+    const ok = await ensureLevelData(lv);
+    if (!ok) return;
+    const code = String(v.spotId).slice(lv.length + 1);
+    if (state.level !== lv) {
+      state.level = lv;
+      $$('.lvbtn').forEach(function (x) {
+        x.classList.toggle('is-active', x.dataset.level === lv);
+      });
+      drawLayer();
+      renderProgress();
+    }
+    await openSheet(lv, code);
+    await startEdit(v);
   }
 
   // 町丁目は塗り分けができない代わりに、行った場所を一覧で見られるようにする

@@ -390,3 +390,32 @@ a{color:var(--navy)}
   box-shadow:0 1px 3px rgba(0,0,0,.25);
   font-size:13px; line-height:1;
 }
+
+
+/* ---- 記録カードの編集ボタン ---- */
+.hcard__right{display:inline-flex; align-items:center; gap:10px; white-space:nowrap}
+.hcard__edit{
+  appearance:none; border:1.5px solid var(--navy); border-radius:99px;
+  padding:4px 12px; background:#fff; color:var(--navy);
+  font:inherit; font-size:11.5px; font-weight:700; cursor:pointer;
+}
+.hcard__edit:active{background:#eef2f8}
+
+/* ---- ランドマークの種類フィルタ ---- */
+.mkinds{
+  display:flex; gap:6px; overflow-x:auto; padding:8px 12px;
+  background:#fff; border-bottom:1px solid var(--line); scrollbar-width:none;
+}
+.mkinds::-webkit-scrollbar{display:none}
+.mkchip{
+  flex:0 0 auto; appearance:none; border:1.5px solid var(--line); border-radius:99px;
+  padding:6px 12px; background:#fff; color:var(--muted);
+  font:inherit; font-size:12.5px; font-weight:700; cursor:pointer;
+  display:inline-flex; align-items:center; gap:5px; line-height:1;
+}
+.mkchip span{font-size:14px}
+.mkchip.is-on{border-color:var(--navy); background:var(--navy); color:#fff}
+
+
+/* ヒント内の強調 */
+.hint b{color:var(--navy)}

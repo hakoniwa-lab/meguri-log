@@ -45,6 +45,8 @@
       <button class="lvbtn is-active" data-level="pref">都道府県</button>
       <button class="lvbtn" data-level="city">市区町村</button>
     </div>
+    <!-- ランドマークを出しているときだけ、種類の絞り込みを出す -->
+    <div class="mkinds" id="mark-kinds" hidden></div>
     <div id="map"></div>
     <!-- 「移動するだけ」と「記録する」は別の操作。
          地図で他の場所を見ているときに現在地へ戻りたいだけ、という場面が多いため分けている。 -->
@@ -55,7 +57,7 @@
       <button id="btn-here" class="fab fab--sub">現在地へ</button>
       <button id="btn-here-record" class="fab">ここを記録</button>
     </div>
-    <p class="hint">都道府県をタップしても記録できます。</p>
+    <p class="hint">地図をタップでその区域を記録。<b>長押しでその地点を記録</b>（一覧に無い場所はこちら）。</p>
   </section>
 
   <section class="panel" id="panel-list">
