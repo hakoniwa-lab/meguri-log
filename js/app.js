@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v19';
+  const APP_VERSION = 'v20';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -70,6 +70,8 @@
     pinsOn: true,
     lines: null,        // 移動の線のレイヤー
     linesOn: true,
+    lineDay: null,      // 表示する日（nullは全部）。既定は最新の日
+    lineDayInit: false,
     marks: null,        // ランドマークのレイヤー
     marksOn: false,     // 通信するので既定はオフ
     marksLoading: false,
@@ -189,6 +191,8 @@
     $('#btn-lines').addEventListener('click', () => {
       state.linesOn = !state.linesOn;
       $('#btn-lines').classList.toggle('is-off', !state.linesOn);
+      const ld = $('#line-days');
+      if (ld && !state.linesOn) ld.hidden = true;
       renderDayLines();
       toast(state.linesOn ? '移動の線を表示します' : '移動の線を隠します');
     });
@@ -240,7 +244,7 @@
   async function renderDayLines() {
     if (!state.map) return;
     if (state.lines) { state.map.removeLayer(state.lines); state.lines = null; }
-    if (!state.linesOn) return;
+    if (!state.linesOn) { const b = $('#line-days'); if (b) b.hidden = true; return; }
 
     const all = await Store.getAllVisits();
     const byDay = new Map();
@@ -252,10 +256,24 @@
       byDay.get(d).push(v);
     }
 
+    // 線になる日（2か所以上）を新しい順に並べ、切り替えのチップを作る
+    const dayList = Array.from(byDay.entries())
+      .filter(function (e) { return e[1].length >= 2; })
+      .map(function (e) { return e[0]; })
+      .sort(function (a, b) { return b.localeCompare(a); });
+
+    // 何日分も重なると「その日どこを回ったか」が読めないので、既定は最新の1日だけ
+    if (!state.lineDayInit && dayList.length) {
+      state.lineDay = dayList[0];
+      state.lineDayInit = true;
+    }
+    buildLineDayChips(dayList);
+
     const group = L.layerGroup();
     let drawn = 0;
     byDay.forEach(function (items, day) {
       if (items.length < 2) return;           // 1点だけの日は線にならない
+      if (state.lineDay && day !== state.lineDay) return;
       // 記録した順（createdAt）に並べる。visitedAtは日付だけなので順序を持たない。
       items.sort(function (a, b) {
         return (a.createdAt || '').localeCompare(b.createdAt || '');
@@ -503,16 +521,93 @@
         popupAnchor: [0, -30],
       });
       const m = L.marker([v.coords.lat, v.coords.lng], { icon });
-      const lines = [
-        '<b>' + escapeHtml(v.name || '') + '</b>',
-        escapeHtml(v.visitedAt || '') + (t.key ? ' ・ ' + t.label : ''),
-      ];
-      if (v.address && v.address.lv01Nm) lines.push(escapeHtml(v.address.lv01Nm));
-      if (v.memo) lines.push(escapeHtml(v.memo));
-      m.bindPopup(lines.join('<br>'));
+      m.bindPopup(buildPinPopup(v, t));
       group.addLayer(m);
     }
     state.pins = group.addTo(state.map);
+  }
+
+  function buildLineDayChips(days) {
+    const box = $('#line-days');
+    if (!box) return;
+    const wanted = ['__all__'].concat(days.slice(0, 40));
+    const cur = box.dataset.days || '';
+    const key = wanted.join(',');
+    if (cur === key) {                       // 中身が同じなら選択状態だけ更新
+      $$('#line-days .ldchip').forEach(function (b) {
+        b.classList.toggle('is-on', (b.dataset.day || '__all__') === (state.lineDay || '__all__'));
+      });
+      return;
+    }
+    box.dataset.days = key;
+    box.innerHTML = '';
+    if (!days.length) { box.hidden = true; return; }
+    box.hidden = !state.linesOn;
+
+    wanted.forEach(function (d) {
+      const isAll = d === '__all__';
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'ldchip';
+      if (!isAll) b.dataset.day = d;
+      b.textContent = isAll ? 'すべての日' : d.slice(5).replace('-', '/');
+      b.classList.toggle('is-on', (isAll ? '__all__' : d) === (state.lineDay || '__all__'));
+      b.addEventListener('click', function () {
+        state.lineDay = isAll ? null : d;
+        renderDayLines();
+      });
+      box.appendChild(b);
+    });
+  }
+
+  // ピンの吹き出し。登録した場所の名前を一番上に出す（市区町村名より先に
+  // 「ここが何の場所か」が分かるほうが役に立つ）。編集にもここから入れる。
+  function buildPinPopup(v, t) {
+    const box = document.createElement('div');
+    box.className = 'pinpop';
+
+    const title = document.createElement('b');
+    title.className = 'pinpop__title';
+    title.textContent = (v.place && v.place.name) ? v.place.name : (v.name || '');
+    box.appendChild(title);
+
+    const sub = document.createElement('div');
+    sub.className = 'pinpop__sub';
+    const parts = [];
+    if (v.place && v.place.name) parts.push(v.name || '');       // 場所名を出したときだけ市区町村を副題に
+    if (t.key) parts.push(t.mark + ' ' + t.label);
+    if (v.address && v.address.lv01Nm) parts.push(v.address.lv01Nm);
+    sub.textContent = parts.filter(Boolean).join(' ・ ');
+    if (sub.textContent) box.appendChild(sub);
+
+    const date = document.createElement('div');
+    date.className = 'pinpop__date';
+    date.textContent = v.visitedAt || '';
+    box.appendChild(date);
+
+    if (v.goshuin && v.goshuin.name) {
+      const g = document.createElement('div');
+      g.className = 'pinpop__goshuin';
+      g.textContent = '御朱印: ' + v.goshuin.name;
+      box.appendChild(g);
+    }
+    if (v.memo) {
+      const memo = document.createElement('div');
+      memo.className = 'pinpop__memo';
+      memo.textContent = v.memo;
+      box.appendChild(memo);
+    }
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn pinpop__edit';
+    btn.textContent = 'この記録を編集';
+    btn.addEventListener('click', async function () {
+      state.map.closePopup();
+      await openVisitForEdit(v);
+    });
+    box.appendChild(btn);
+    return box;
   }
 
   function escapeHtml(t) {
