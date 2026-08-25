@@ -1,6 +1,6 @@
 {
-  "name": "めぐりログ",
-  "short_name": "めぐりログ",
+  "name": "めぐログ",
+  "short_name": "めぐログ",
   "description": "行った場所を地図に残していく記録アプリ",
   "start_url": "./",
   "scope": "./",

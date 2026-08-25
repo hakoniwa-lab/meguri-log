@@ -1,5 +1,5 @@
 /*
-  app.js — めぐりログ 本体
+  app.js — めぐログ 本体
 
   Phase 1: 都道府県 / 市区町村の制覇 ＋ 町丁目の記録
   データの読み書きは storage.js の Store 経由でしか行わない（クラウド差し替えのため）。
@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v21';
+  const APP_VERSION = 'v22';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -1281,7 +1281,7 @@
     }
     const file = new File([photo.blob], photoFileName(visit), { type: photo.type || 'image/jpeg' });
     try {
-      await navigator.share({ files: [file], title: visit.name || 'めぐりログ' });
+      await navigator.share({ files: [file], title: visit.name || 'めぐログ' });
     } catch (e) {
       if (e && e.name === 'AbortError') return;
       toast('共有できませんでした。「端末に保存」を使ってください');

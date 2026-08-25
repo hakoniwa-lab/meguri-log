@@ -171,7 +171,7 @@ const Store = (() => {
 
     async importAll(data, { merge = true } = {}) {
       if (!data || data.app !== 'meguri-log') {
-        throw new Error('このファイルは めぐりログ の書き出しデータではありません');
+        throw new Error('このファイルは めぐログ の書き出しデータではありません');
       }
       if (!merge) {
         const t = tx(['visits', 'spots', 'photos'], 'readwrite');
