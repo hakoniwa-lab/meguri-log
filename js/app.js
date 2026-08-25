@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v20';
+  const APP_VERSION = 'v21';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -71,7 +71,7 @@
     lines: null,        // 移動の線のレイヤー
     linesOn: true,
     lineDay: null,      // 表示する日（nullは全部）。既定は最新の日
-    lineDayInit: false,
+    lineDayPicked: false,  // ユーザーが自分で日を選んだか
     marks: null,        // ランドマークのレイヤー
     marksOn: false,     // 通信するので既定はオフ
     marksLoading: false,
@@ -262,10 +262,11 @@
       .map(function (e) { return e[0]; })
       .sort(function (a, b) { return b.localeCompare(a); });
 
-    // 何日分も重なると「その日どこを回ったか」が読めないので、既定は最新の1日だけ
-    if (!state.lineDayInit && dayList.length) {
-      state.lineDay = dayList[0];
-      state.lineDayInit = true;
+    // 何日分も重なると「その日どこを回ったか」が読めないので、既定は最新の1日だけ。
+    // 自分で日を選ぶまでは最新の日に追従する（開いたまま今日の記録を足しても線が出るように）。
+    if (dayList.length) {
+      if (!state.lineDayPicked) state.lineDay = dayList[0];
+      else if (state.lineDay && !dayList.includes(state.lineDay)) state.lineDay = dayList[0];
     }
     buildLineDayChips(dayList);
 
@@ -554,6 +555,7 @@
       b.classList.toggle('is-on', (isAll ? '__all__' : d) === (state.lineDay || '__all__'));
       b.addEventListener('click', function () {
         state.lineDay = isAll ? null : d;
+        state.lineDayPicked = true;
         renderDayLines();
       });
       box.appendChild(b);
