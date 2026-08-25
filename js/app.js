@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v25';
+  const APP_VERSION = 'v26';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -72,6 +72,9 @@
     linesOn: true,
     lineDay: null,      // 表示する日（nullは全部）。既定は最新の日
     lineDayPicked: false,  // ユーザーが自分で日を選んだか
+    shareType: null,       // この端末の共有シートが受け付ける形式
+    backupFile: null,      // 共有用に先に作っておくバックアップ
+    backupBuilding: false,
     marks: null,        // ランドマークのレイヤー
     marksOn: false,     // 通信するので既定はオフ
     marksLoading: false,
@@ -1950,8 +1953,11 @@
     if (name === 'history') renderHistory(true);
     // 記録したあとに設定を開いたとき、バックアップの状況が古いままにならないように
     if (name === 'settings') {
-      ensurePersistOnce().then(renderPersistInfo);
+      ensurePersistOnce().then(() => { renderPersistInfo(); renderDeviceInfo(); });
       renderBackupStatus(); renderStorageInfo();
+      prepareBackupFile(state.shareType);
+    } else {
+      releaseBackupFile();
     }
   }
 
@@ -1969,6 +1975,38 @@
   // ---------------------------------------------------------------
   // 設定
   // ---------------------------------------------------------------
+  // 共有用のファイルを先に作っておく。設定を離れたら捨てる（写真の分だけ重いため）。
+  async function prepareBackupFile(shareType) {
+    if (!shareType || state.backupBuilding) return;
+    state.backupBuilding = true;
+    try {
+      const b = await buildBackup();
+      const name = b.name.replace(/\.json$/, '.' + shareType.ext);
+      state.backupFile = {
+        file: new File([b.blob], name, { type: shareType.type }),
+        counts: b.counts,
+      };
+    } catch (e) {
+      state.backupFile = null;
+    } finally {
+      state.backupBuilding = false;
+    }
+  }
+
+  async function saveBackupFile(file, counts) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(file);
+    a.download = file.name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    await Store.markBackedUp(counts);
+    renderBackupStatus();
+  }
+
+  function releaseBackupFile() {
+    state.backupFile = null;
+  }
+
   // この端末の共有シートが受け付ける形式を選ぶ。どれも通らなければ null。
   function pickShareType(candidates) {
     if (!navigator.canShare || !navigator.share) return null;
@@ -2004,22 +2042,34 @@
     const shareType = pickShareType(SHARE_TYPES);
     if (shareType) shareBtn.hidden = false;
 
-    shareBtn.addEventListener('click', async () => {
-      const b = await buildBackup();
-      const name = b.name.replace(/\.json$/, '.' + shareType.ext);
-      try {
-        await navigator.share({
-          files: [new File([b.blob], name, { type: shareType.type })],
-          title: 'めぐログのバックアップ',
-        });
-        await Store.markBackedUp(b.counts);
-        renderBackupStatus();
-        toast('送信先を選んで保存してください');
-      } catch (err) {
-        if (err && err.name === 'AbortError') return;   // 本人が閉じただけ
-        toast('送れませんでした。「ファイルに保存」をお使いください');
+    // ★共有は押された直後に呼ばないと弾かれる★
+    // ブラウザは「ユーザーが押した直後」にしか共有を許さない（一時的な操作権限）。
+    // ここで記録と写真を読み出してから share() を呼ぶと、その待ち時間で権限が切れ、
+    // Androidでは必ず失敗する。だから設定を開いた時点でファイルを作っておき、
+    // クリック時は await を一切挟まずに share() を呼ぶ。
+    shareBtn.addEventListener('click', () => {
+      const ready = state.backupFile;
+      if (!ready) {
+        toast('バックアップを準備中です。少し待ってからもう一度押してください');
+        prepareBackupFile(shareType);
+        return;
       }
+      navigator.share({ files: [ready.file], title: 'めぐログのバックアップ' })
+        .then(async () => {
+          await Store.markBackedUp(ready.counts);
+          renderBackupStatus();
+          toast('送信先を選んで保存してください');
+        })
+        .catch((err) => {
+          if (err && err.name === 'AbortError') return;   // 本人が閉じただけ
+          // 端末側の事情で共有が通らないことがある。ここで行き止まりにせず、
+          // 同じファイルをそのまま保存に回す（何も起きないのが一番困る）。
+          saveBackupFile(ready.file, ready.counts);
+          toast('共有できなかったので、ファイルとして保存しました');
+        });
     });
+
+    state.shareType = shareType;
 
     $('#btn-persist').addEventListener('click', async () => {
       const r = await Store.persist();
@@ -2029,13 +2079,7 @@
 
     $('#btn-export').addEventListener('click', async () => {
       const b = await buildBackup();
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(b.blob);
-      a.download = b.name;
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-      await Store.markBackedUp(b.counts);
-      renderBackupStatus();
+      saveBackupFile(new File([b.blob], b.name, { type: 'application/json' }), b.counts);
     });
 
     $('#btn-import').addEventListener('click', () => $('#import-file').click());
@@ -2089,10 +2133,10 @@
       toast('削除しました');
     });
 
-    renderDeviceInfo();
     renderBackupStatus();
     renderPersistInfo();
     renderStorageInfo();
+    renderDeviceInfo();   // shareType が決まったあとに呼ぶ
   }
 
   function renderStorageInfo() {
@@ -2103,6 +2147,13 @@
     });
   }
 
+  // iPadOS 13以降はMacintoshを名乗るので、タッチの有無で見分ける
+  function isIOS() {
+    const ua = navigator.userAgent;
+    return /iPhone|iPad|iPod/.test(ua)
+      || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  }
+
   // 保存の永続化。断られても記録は続けられるので黙って進む。
   // 「記録を保存したとき」だけに頼っていたため、設定を見に行っただけの人には
   // 一度も要求されず、いつまでも未保護と表示されていた。起動時にも頼む。
@@ -2111,6 +2162,12 @@
     if (persistAsked) return Promise.resolve();
     persistAsked = true;
     return Store.persist().then(() => { renderPersistInfo(); }).catch(() => {});
+  }
+
+  // 端末の対応状況に「保存の保護」も出しておくと切り分けが早い
+  function persistLabel(p, installed) {
+    if (p) return '保護されている';
+    return installed ? 'ホーム画面アプリ（保護の宣言はなし）' : '未保護';
   }
 
   async function renderBackupStatus() {
@@ -2151,7 +2208,14 @@
     } else if (installed) {
       el.textContent = 'ホーム画面のアプリとして開いているため、記録は通常そのまま保持されます。'
         + 'ただしブラウザからの保証はないので、ときどきバックアップを取ってください。';
-      if (btn) btn.hidden = false;
+      if (btn) btn.hidden = !!isIOS();          // iOSでは押しても必ず断られる
+    } else if (isIOS()) {
+      // iOSは保護の要求に必ずfalseを返す。押しても断られるだけのボタンは出さず、
+      // 実際に効果があるホーム画面への追加を案内する。
+      el.textContent = 'Safariのタブで開いています。この状態だと、しばらく使わないと'
+        + 'iOSが記録を消すことがあります。共有ボタン → 「ホーム画面に追加」から'
+        + 'アプリとして開いてください。';
+      if (btn) btn.hidden = true;
     } else {
       el.textContent = '未保護: 空き容量が足りなくなると、ブラウザが記録を消すことがあります。'
         + 'ホーム画面に追加すると保護されやすくなります。';
@@ -2161,7 +2225,7 @@
   }
 
   // 端末の対応状況。写真保存がうまくいかないときの切り分けに使う。
-  function renderDeviceInfo() {
+  async function renderDeviceInfo() {
     const box = $('#device-info');
     if (!box) return;
     let canFiles = false;
@@ -2171,21 +2235,27 @@
     } catch (e) { canFiles = false; }
 
     const ua = navigator.userAgent;
-    const isIOS = /iPhone|iPad|iPod/.test(ua) ||
-      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    const ios = isIOS();
     const isAndroid = /Android/.test(ua);
-    const osName = isIOS ? 'iPhone / iPad' : (isAndroid ? 'Android' : 'パソコンなど');
+    const osName = ios ? 'iPhone / iPad' : (isAndroid ? 'Android' : 'パソコンなど');
+    const installed = window.matchMedia('(display-mode: standalone)').matches
+      || window.navigator.standalone === true;
+    const persisted = await Store.persisted();
+    const bkType = state.shareType;
 
     const rows = [
       ['アプリのバージョン', APP_VERSION],
       ['端末の種類', osName],
+      ['開き方', installed ? 'ホーム画面のアプリ' : 'ブラウザのタブ'],
+      ['保存の保護', persistLabel(persisted, installed)],
       ['写真の共有', canFiles ? '使えます' : '使えません'],
+      ['バックアップの共有', bkType ? ('使えます（.' + bkType.ext + '）') : '使えません'],
       ['位置情報', ('geolocation' in navigator) ? '使えます' : '使えません'],
       ['オフライン起動', ('serviceWorker' in navigator) ? '使えます' : '使えません'],
     ];
 
     let advice;
-    if (isIOS && canFiles) {
+    if (ios && canFiles) {
       advice = '「共有」を押すと共有シートが開きます。その中の「画像を保存」でカメラロールに入ります。';
     } else if (isAndroid) {
       advice = 'Androidの共有シートには「画像を保存」という項目がありません。' +
