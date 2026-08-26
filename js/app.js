@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v26';
+  const APP_VERSION = 'v28';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -205,6 +205,12 @@
       renderPins();
       toast(state.pinsOn ? '記録のピンを表示します' : '記録のピンを隠します');
     });
+    const now = $('#btn-now');
+    if (now) now.addEventListener('click', () => {
+      $('#visit-date').value = todayLocal();
+      $('#visit-time').value = nowTimeLocal();
+    });
+
     $('#btn-here').addEventListener('click', () => locate(false));
     $('#btn-here-record').addEventListener('click', () => locate(true));
   }
@@ -491,6 +497,26 @@
     toast('この地点を記録します。場所の名前を入れてください');
   }
 
+  // 同じ場所に「また来た」を足す。場所の情報は引き継ぎ、日時は今にする。
+  async function openPlaceForNewVisit(v) {
+    const lv = v.category;
+    if (!LEVELS[lv]) return;
+    if (!(await ensureLevelData(lv))) return;
+    const code = String(v.spotId).slice(lv.length + 1);
+    if (state.level !== lv) {
+      state.level = lv;
+      $$('.lvbtn').forEach((b) => b.classList.toggle('is-active', b.dataset.level === lv));
+      drawLayer(); renderProgress();
+    }
+    await openSheet(lv, code, v.coords || undefined);   // 日時は今、フォームは空の状態
+    setTagValue(v.tag || '');
+    if (v.place) setPlace(v.place);
+    if (v.address) state.selected.address = v.address;
+    $('#place-body').removeAttribute('hidden');
+    $('#place-toggle').classList.add('is-open');
+    toast((v.place && v.place.name ? v.place.name : v.name) + ' に来たことを追加します');
+  }
+
   // ランドマークから記録する。市区町村を割り出し、場所の名前とタグを入れた状態で開く。
   async function recordLandmark(name, kind, lat, lng) {
     state.map.closePopup();
@@ -514,18 +540,24 @@
     const withCoords = all.filter((v) => v.coords && typeof v.coords.lat === 'number');
     if (!withCoords.length) return;
 
+    // ★同じ場所は1本のピンにまとめる★
+    // よく行く場所を何度も記録すると、訪問ごとにピンが立って地図が読めなくなる。
+    const places = groupByPlace(withCoords);
+
     const group = L.layerGroup();
-    for (const v of withCoords) {
+    for (const g of places) {
+      const v = g.items[0];                 // 最新の記録を代表にする
       const t = tagOf(v.tag);
       const icon = L.divIcon({
         className: 'pin',
-        html: '<span class="pin__mark">' + t.mark + '</span>',
+        html: '<span class="pin__mark">' + t.mark + '</span>'
+          + (g.items.length > 1 ? '<b class="pin__count">' + g.items.length + '</b>' : ''),
         iconSize: [34, 34],
         iconAnchor: [17, 34],
         popupAnchor: [0, -30],
       });
-      const m = L.marker([v.coords.lat, v.coords.lng], { icon });
-      m.bindPopup(buildPinPopup(v, t));
+      const m = L.marker([g.lat, g.lng], { icon });
+      m.bindPopup(buildPinPopup(g, t));
       group.addLayer(m);
     }
     state.pins = group.addTo(state.map);
@@ -565,36 +597,130 @@
     });
   }
 
+  // ★日付は必ずローカルで作る★
+  // new Date().toISOString().slice(0,10) は UTC を返すため、日本時間の朝9時前に
+  // 記録すると前日の日付が入ってしまう。
+  function todayLocal(d) {
+    const t = d || new Date();
+    const p = (n) => String(n).padStart(2, '0');
+    return t.getFullYear() + '-' + p(t.getMonth() + 1) + '-' + p(t.getDate());
+  }
+
+  function nowTimeLocal(d) {
+    const t = d || new Date();
+    const p = (n) => String(n).padStart(2, '0');
+    return p(t.getHours()) + ':' + p(t.getMinutes());
+  }
+
+  // 並べ替え・表示に使う「日付＋時刻」。時刻が無い記録も混ざるので既定値を置く
+  function visitStamp(v) {
+    return (v.visitedAt || '') + ' ' + (v.visitedTime || '00:00');
+  }
+
+  // 「8/26 14:30」の形。時刻が無ければ日付だけ
+  function visitLabel(v) {
+    const d = (v.visitedAt || '').split('-');
+    const day = d.length === 3 ? Number(d[1]) + '/' + Number(d[2]) : (v.visitedAt || '');
+    return v.visitedTime ? day + ' ' + v.visitedTime : day;
+  }
+
+  // 同じ場所かどうかの判定。
+  // 名前を付けた場所は「名前が同じなら同じ場所」。GPSは数十mずれるので座標では見ない。
+  // 名前が無い記録どうしは、50m以内なら同じ場所とみなす。
+  // 名前あり・なしは混ぜない（付けた本人が区別しているため）。
+  function groupByPlace(visits) {
+    const NEAR = 50;                        // メートル
+    const named = new Map();
+    const anon = [];
+
+    const sorted = visits.slice().sort((a, b) => visitStamp(b).localeCompare(visitStamp(a)));
+    for (const v of sorted) {
+      const name = (v.place && v.place.name || '').trim();
+      if (name) {
+        if (!named.has(name)) named.set(name, { name, lat: v.coords.lat, lng: v.coords.lng, items: [] });
+        named.get(name).items.push(v);
+      } else {
+        const near = anon.find((g) => distMeters(g.lat, g.lng, v.coords.lat, v.coords.lng) <= NEAR);
+        if (near) near.items.push(v);
+        else anon.push({ name: '', lat: v.coords.lat, lng: v.coords.lng, items: [v] });
+      }
+    }
+    return Array.from(named.values()).concat(anon);
+  }
+
+  // 2点間のおおよその距離（メートル）
+  function distMeters(lat1, lng1, lat2, lng2) {
+    const R = 6371000, rad = Math.PI / 180;
+    const dLat = (lat2 - lat1) * rad;
+    const dLng = (lng2 - lng1) * rad;
+    const a = Math.sin(dLat / 2) ** 2
+      + Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(a));
+  }
+
   // ピンの吹き出し。登録した場所の名前を一番上に出す（市区町村名より先に
   // 「ここが何の場所か」が分かるほうが役に立つ）。編集にもここから入れる。
-  function buildPinPopup(v, t) {
+  function buildPinPopup(g, t) {
+    const v = g.items[0];                    // 最新の記録
     const box = document.createElement('div');
     box.className = 'pinpop';
 
     const title = document.createElement('b');
     title.className = 'pinpop__title';
-    title.textContent = (v.place && v.place.name) ? v.place.name : (v.name || '');
+    title.textContent = g.name || v.name || '';
     box.appendChild(title);
 
     const sub = document.createElement('div');
     sub.className = 'pinpop__sub';
     const parts = [];
-    if (v.place && v.place.name) parts.push(v.name || '');       // 場所名を出したときだけ市区町村を副題に
+    if (g.name) parts.push(v.name || '');    // 場所名を出したときだけ市区町村を副題に
     if (t.key) parts.push(t.mark + ' ' + t.label);
     if (v.address && v.address.lv01Nm) parts.push(v.address.lv01Nm);
     sub.textContent = parts.filter(Boolean).join(' ・ ');
     if (sub.textContent) box.appendChild(sub);
 
-    const date = document.createElement('div');
-    date.className = 'pinpop__date';
-    date.textContent = v.visitedAt || '';
-    box.appendChild(date);
+    if (g.items.length > 1) {
+      const c = document.createElement('div');
+      c.className = 'pinpop__date';
+      c.textContent = g.items.length + '回訪問';
+      box.appendChild(c);
+    }
+
+    // 訪問した日時を新しい順に。行をタップするとその回を編集できる
+    const list = document.createElement('ul');
+    list.className = 'pinpop__times';
+    const SHOW = 6;
+    for (const item of g.items.slice(0, SHOW)) {
+      const li = document.createElement('li');
+      li.className = 'pinpop__time';
+      const when = document.createElement('span');
+      when.textContent = visitLabel(item);
+      li.appendChild(when);
+      const edit = document.createElement('button');
+      edit.type = 'button';
+      edit.className = 'linkbtn';
+      edit.textContent = '編集';
+      edit.addEventListener('click', async () => {
+        state.map.closePopup();
+        await openVisitForEdit(item);
+      });
+      li.appendChild(edit);
+      list.appendChild(li);
+    }
+    box.appendChild(list);
+
+    if (g.items.length > SHOW) {
+      const more = document.createElement('div');
+      more.className = 'pinpop__more';
+      more.textContent = '他 ' + (g.items.length - SHOW) + ' 件';
+      box.appendChild(more);
+    }
 
     if (v.goshuin && v.goshuin.name) {
-      const g = document.createElement('div');
-      g.className = 'pinpop__goshuin';
-      g.textContent = '御朱印: ' + v.goshuin.name;
-      box.appendChild(g);
+      const gs = document.createElement('div');
+      gs.className = 'pinpop__goshuin';
+      gs.textContent = '御朱印: ' + v.goshuin.name;
+      box.appendChild(gs);
     }
     if (v.memo) {
       const memo = document.createElement('div');
@@ -606,10 +732,13 @@
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'btn pinpop__edit';
-    btn.textContent = 'この記録を編集';
-    btn.addEventListener('click', async function () {
+    btn.textContent = g.items.length > 1 ? 'ここに来たことを追加' : 'この記録を編集';
+    btn.addEventListener('click', async () => {
       state.map.closePopup();
-      await openVisitForEdit(v);
+      // 複数回来ている場所は「また来た」を足したいので、編集ではなく新規で開く。
+      // 編集で開くと保存が最新の記録の上書きになり、回数が増えない。
+      if (g.items.length > 1) await openPlaceForNewVisit(v);
+      else await openVisitForEdit(v);
     });
     box.appendChild(btn);
     return box;
@@ -772,7 +901,8 @@
     $('#sheet-sub').textContent = LEVELS[level].label +
       (feat.properties.pref ? ' / ' + feat.properties.pref : '') +
       (level === 'city' && feat.properties.pref ? '（都道府県もあわせて記録されます）' : '');
-    $('#visit-date').value = new Date().toISOString().slice(0, 10);
+    $('#visit-date').value = todayLocal();
+    $('#visit-time').value = nowTimeLocal();
     $('#visit-memo').value = '';
     setTagValue('');
     clearExtraFields();
@@ -819,7 +949,7 @@
 
   async function renderVisitList(spotId) {
     const visits = await Store.getVisitsBySpot(spotId);
-    visits.sort((a, b) => (a.visitedAt < b.visitedAt ? 1 : -1));
+    visits.sort((a, b) => visitStamp(b).localeCompare(visitStamp(a)));
     const box = $('#visit-list');
     if (!visits.length) {
       box.innerHTML = '<p class="muted">まだ記録がありません。</p>';
@@ -831,7 +961,8 @@
       row.className = 'visit';
       const head = document.createElement('div');
       head.className = 'visit__head';
-      head.innerHTML = `<b>${tagOf(v.tag).mark} ${v.visitedAt}</b>`;
+      head.innerHTML = `<b>${tagOf(v.tag).mark} ${escapeHtml(v.visitedAt || '')}` +
+        (v.visitedTime ? ` <span class="visit__time">${escapeHtml(v.visitedTime)}</span>` : '') + '</b>';
       const del = document.createElement('button');
       del.className = 'linkbtn';
       del.textContent = '削除';
@@ -940,7 +1071,8 @@
     clearPending();                       // 先に new/edit 状態をまっさらにする
     state.editing = visit;
 
-    $('#visit-date').value = visit.visitedAt || new Date().toISOString().slice(0, 10);
+    $('#visit-date').value = visit.visitedAt || todayLocal();
+    $('#visit-time').value = visit.visitedTime || '';
     $('#visit-memo').value = visit.memo || '';
     setTagValue(visit.tag || '');
     $('#visit-amount').value = (visit.amount || visit.amount === 0) ? visit.amount : '';
@@ -1181,7 +1313,8 @@
 
     $('#edit-cancel').addEventListener('click', () => {
       clearPending();
-      $('#visit-date').value = new Date().toISOString().slice(0, 10);
+      $('#visit-date').value = todayLocal();
+    $('#visit-time').value = nowTimeLocal();
       $('#visit-memo').value = '';
     });
 
@@ -1204,6 +1337,7 @@
         }
         await Store.updateVisit(Object.assign({}, v, {
           visitedAt: $('#visit-date').value || v.visitedAt,
+          visitedTime: $('#visit-time').value || '',
           memo: $('#visit-memo').value.trim(),
           tag: getTagValue(),
           amount: amountValue(),
@@ -1219,7 +1353,8 @@
           spotId,
           category: sel.level,
           name: sel.name,
-          visitedAt: $('#visit-date').value || new Date().toISOString().slice(0, 10),
+          visitedAt: $('#visit-date').value || todayLocal(),
+          visitedTime: $('#visit-time').value || '',
           memo: $('#visit-memo').value.trim(),
           tag: getTagValue(),
           amount: amountValue(),
@@ -2022,7 +2157,7 @@
   // バックアップの中身を1つ作る。共有にもファイル保存にも同じものを使う。
   async function buildBackup() {
     const data = await Store.exportAll();
-    const name = `meguri-log-${new Date().toISOString().slice(0, 10)}.json`;
+    const name = `meguri-log-${todayLocal()}.json`;
     const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
     return { data, name, blob, counts: { visits: data.visits.length, photos: data.photos.length } };
   }

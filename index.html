@@ -49,6 +49,9 @@
     <div class="mkinds" id="mark-kinds" hidden></div>
     <!-- 移動の線は何日分も重なると読めないので、日ごとに切り替える -->
     <div class="mkinds ldays" id="line-days" hidden></div>
+    <!-- ボタンは地図の枠に対して固定する。パネル基準にすると、下の説明文が
+         2行に折り返した端末でボタンが地図からはみ出し、地図の帰属表示に重なる。 -->
+    <div class="mapwrap">
     <div id="map"></div>
     <!-- 「移動するだけ」と「記録する」は別の操作。
          地図で他の場所を見ているときに現在地へ戻りたいだけ、という場面が多いため分けている。 -->
@@ -58,6 +61,7 @@
       <button id="btn-pins" class="fab fab--sub fab--icon" title="記録のピンを表示／非表示">📍</button>
       <button id="btn-here" class="fab fab--sub">現在地へ</button>
       <button id="btn-here-record" class="fab">ここを記録</button>
+    </div>
     </div>
     <p class="hint">地図をタップでその区域を記録。<b>長押しでその地点を記録</b>（一覧に無い場所はこちら）。</p>
   </section>
@@ -156,10 +160,15 @@
       <button type="button" id="edit-cancel" class="editbar__btn">やめる</button>
     </div>
 
-    <label class="field">
-      <span>訪れた日</span>
-      <input type="date" id="visit-date">
-    </label>
+    <div class="field">
+      <span>訪れた日時</span>
+      <!-- 同じ場所に何度も行くので、時刻まで残せるようにしている。時刻は空でもよい -->
+      <div class="when">
+        <input type="date" id="visit-date">
+        <input type="time" id="visit-time">
+        <button type="button" id="btn-now" class="linkbtn">今</button>
+      </div>
+    </div>
 
     <div class="field">
       <span>何で行った？（任意）</span>

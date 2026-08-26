@@ -44,7 +44,10 @@ a{color:var(--navy)}
 /* ---- 地図 ---- */
 #panel-map{position:relative}
 #map{height:calc(100vh - 230px); min-height:320px; background:#e8eef5}
-.fabs{position:absolute; right:14px; bottom:52px; z-index:500; display:flex; flex-direction:column; gap:8px; align-items:flex-end}
+/* 地図の枠を基準にする。パネル基準だと、下の説明文の行数でボタン位置がずれる */
+.mapwrap{position:relative}
+/* bottom は地図の帰属表示（約17px）を避けられる高さにする */
+.fabs{position:absolute; right:14px; bottom:26px; z-index:500; display:flex; flex-direction:column; gap:8px; align-items:flex-end}
 .fab{
   appearance:none; border:0; border-radius:99px; padding:12px 18px;
   background:var(--navy); color:#fff; font:inherit; font-weight:700; font-size:14px;
@@ -445,3 +448,23 @@ a{color:var(--navy)}
 .bkup.is-ok{color:#2f6b3f}
 .muted.is-warn{color:#a8410f; font-weight:700}
 .btn--slim{padding:7px 14px; font-size:12.5px; margin:2px 0 8px}
+
+/* ---- 訪れた日時 ---- */
+.when{display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+.when input[type=date]{flex:1 1 150px; min-width:140px}
+.when input[type=time]{flex:0 1 110px; min-width:100px}
+
+/* ---- 同じ場所をまとめたピン ---- */
+.pin{position:relative}
+.pin__count{
+  position:absolute; top:-4px; right:-6px; min-width:17px; height:17px; padding:0 4px;
+  border-radius:99px; background:var(--navy); color:#fff; border:1.5px solid #fff;
+  font-size:10.5px; line-height:14px; text-align:center; font-weight:700;
+}
+.pinpop__times{margin:6px 0 0; padding:0; list-style:none; border-top:1px solid var(--line)}
+.pinpop__time{
+  display:flex; justify-content:space-between; align-items:center; gap:8px;
+  padding:5px 0; border-bottom:1px solid var(--line); font-size:12.5px;
+}
+.pinpop__more{margin-top:5px; font-size:11.5px; color:var(--muted)}
+.visit__time{font-weight:700; color:var(--muted); font-size:12.5px}
