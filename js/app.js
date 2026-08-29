@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v30';
+  const APP_VERSION = 'v31';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -66,6 +66,8 @@
 
   const state = {
     level: 'pref',
+    fillOn: true,          // 訪問済みの塗り分けを出すか
+    placeIndex: null,      // 場所検索の索引（GeoJSONぶん。重いので一度だけ作る）
     geo: { pref: null, city: null },   // 読み込んだGeoJSON（cityは初回切替時に取得）
     layer: null,
     map: null,
@@ -185,13 +187,15 @@
       state.marksOn = !state.marksOn;
       $('#btn-marks').classList.toggle('is-off', !state.marksOn);
       $('#mark-kinds').hidden = !state.marksOn;
+      showSearchArea(false);
       renderLandmarks(true);
       if (!state.marksOn) toast('ランドマークを隠します');
     });
-    // 地図を動かしたら、その範囲のランドマークを取り直す
+    // 地図を動かしても勝手には取りに行かない。「この範囲で探す」を出して、
+    // 押されたときだけ探す。いつ検索しているかが分かり、提供元への負荷も減る。
     state.map.on('moveend', () => {
       state.markCache = null;   // 範囲が変わったら取り直す
-      if (state.marksOn) renderLandmarks(false);
+      if (state.marksOn) showSearchArea(true);
     });
 
     // 一覧にもOSMにも無い場所は、地図を長押しして自分で登録する。
@@ -220,11 +224,31 @@
       $('#visit-time').value = nowTimeLocal();
     });
 
+    // 訪問済みの色を消す。地図そのものを読みたいときに使う。
+    $('#btn-fill').addEventListener('click', () => {
+      state.fillOn = !state.fillOn;
+      $('#btn-fill').classList.toggle('is-off', !state.fillOn);
+      if (state.layer) state.layer.setStyle(styleFor);
+      toast(state.fillOn ? '訪問済みの色を出します' : '訪問済みの色を隠します');
+    });
+
+    // 「この範囲で探す」。押したときだけランドマークを取りに行く。
+    $('#btn-search-area').addEventListener('click', () => {
+      showSearchArea(false);
+      renderLandmarks(true);
+    });
+
+    initMapSearch();
     $('#btn-here').addEventListener('click', () => locate(false));
     $('#btn-here-record').addEventListener('click', () => locate(true));
   }
 
   function styleFor(feat) {
+    // 塗りを消したいとき。訪問済みが増えると地図が色で埋まって地名が読めなくなる。
+    // 境界だけ薄く残す（消すとタップできる範囲が分からなくなるため）。
+    if (!state.fillOn) {
+      return { color: '#2c3e62', weight: 0.5, opacity: 0.3, fillOpacity: 0 };
+    }
     const done = state.visited[state.level].has(spotIdOf(state.level, feat.properties.code));
     return {
       color: '#2c3e62',
@@ -375,6 +399,147 @@
       }
     }
     return null;
+  }
+
+  // 「この範囲で探す」の出し入れ。ランドマークを消したら一緒に隠す。
+  function showSearchArea(on) {
+    const b = $('#btn-search-area');
+    if (!b) return;
+    b.hidden = !(on && state.marksOn);
+    b.disabled = false;
+    b.textContent = 'この範囲で探す';
+  }
+
+  // ---- 場所検索 ----
+  // 手元にあるものだけを探す（通信しない）。
+  //   1. 自分の記録（場所の名前・地名・メモ）
+  //   2. 読み込み済みの都道府県／市区町村
+  // 市区町村は初回だけ2MBを読むので、検索されたときに読みに行く。
+  function initMapSearch() {
+    const q = $('#map-q'), hits = $('#map-hits'), x = $('#map-q-clear');
+    if (!q) return;
+    let timer = null;
+
+    const close = () => { hits.hidden = true; hits.innerHTML = ''; };
+    const clear = () => { q.value = ''; x.hidden = true; close(); };
+    x.addEventListener('click', clear);
+
+    q.addEventListener('input', () => {
+      x.hidden = !q.value;
+      clearTimeout(timer);
+      timer = setTimeout(() => runMapSearch(q.value.trim()), 220);
+    });
+    q.addEventListener('keydown', (e) => { if (e.key === 'Escape') clear(); });
+    // 地図をさわったら候補を閉じる（指で隠れて邪魔になるため）
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.mapsearch')) close();
+    });
+
+    async function runMapSearch(text) {
+      if (!text) { close(); return; }
+      // 市区町村まで探せたほうが役に立つので、未読なら読みに行く
+      if (!state.geo.city && !state.loadingCity) await ensureLevelData('city');
+      const visits = await Store.getAllVisits();
+      const list = searchPlaces(text, 8, visits);
+      hits.innerHTML = '';
+      if (!list.length) {
+        const n = document.createElement('div');
+        n.className = 'mapsearch__none';
+        n.textContent = '見つかりませんでした';
+        hits.appendChild(n);
+        hits.hidden = false;
+        return;
+      }
+      for (const it of list) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'mapsearch__hit';
+        b.innerHTML = '';
+        b.appendChild(document.createTextNode(it.name));
+        const sm = document.createElement('small');
+        sm.textContent = it.sub;
+        b.appendChild(sm);
+        b.addEventListener('click', () => {
+          close();
+          q.blur();
+          state.map.setView([it.lat, it.lng], it.zoom);
+          // 動かすと「この範囲で探す」が出るので、飛んだ先ですぐ探せる
+          if (state.marksOn) showSearchArea(true);
+        });
+        hits.appendChild(b);
+      }
+      hits.hidden = false;
+    }
+  }
+
+  // 検索の索引。GeoJSONは件数が多いので一度だけ作って使い回す。
+  function buildPlaceIndex() {
+    const idx = [];
+    for (const lv of ['pref', 'city']) {
+      const gj = state.geo[lv];
+      if (!gj) continue;
+      for (const f of gj.features) {
+        const c = centerOfFeature(f);
+        if (!c) continue;
+        idx.push({
+          name: f.properties.name,
+          sub: lv === 'pref' ? '都道府県' : '市区町村',
+          lat: c[0], lng: c[1], zoom: lv === 'pref' ? 9 : 12,
+        });
+      }
+    }
+    return idx;
+  }
+
+  // ポリゴンのおおよその中心。全頂点の平均で足りる（正確な重心は要らない）。
+  function centerOfFeature(f) {
+    let sx = 0, sy = 0, n = 0;
+    const eat = (ring) => { for (const p of ring) { sx += p[0]; sy += p[1]; n++; } };
+    const g = f.geometry;
+    if (!g) return null;
+    if (g.type === 'Polygon') g.coordinates.forEach(eat);
+    else if (g.type === 'MultiPolygon') g.coordinates.forEach((poly) => poly.forEach(eat));
+    else return null;
+    return n ? [sy / n, sx / n] : null;
+  }
+
+  function searchPlaces(text, limit, visits) {
+    const t = text.toLowerCase();
+    const out = [];
+
+    // 自分の記録を先に出す。探しているのは大抵「前に行ったあそこ」なので。
+    const seen = new Set();
+    (visits || []).sort((a, b) => visitStamp(b).localeCompare(visitStamp(a)));
+    for (const v of (visits || [])) {
+      if (!v.coords) continue;
+      const nm = (v.place && v.place.name || '').trim();
+      const hay = [nm, v.name, v.memo, v.goshuin && v.goshuin.name]
+        .filter(Boolean).join(' ').toLowerCase();
+      if (hay.indexOf(t) < 0) continue;
+      const label = nm || v.name || '(名前なし)';
+      if (seen.has(label)) continue;
+      seen.add(label);
+      out.push({
+        name: label,
+        sub: '記録' + (nm && v.name ? ' ・ ' + v.name : ''),
+        lat: v.coords.lat, lng: v.coords.lng, zoom: 16,
+      });
+      if (out.length >= limit) return out;
+    }
+
+    if (!state.placeIndex) state.placeIndex = buildPlaceIndex();
+    // 前方一致を先に、次に部分一致。「金沢」で金沢市が上に来るようにする。
+    const starts = [], includes = [];
+    for (const it of state.placeIndex) {
+      const n = it.name.toLowerCase();
+      if (n.startsWith(t)) starts.push(it);
+      else if (n.indexOf(t) >= 0) includes.push(it);
+    }
+    for (const it of starts.concat(includes)) {
+      out.push(it);
+      if (out.length >= limit) break;
+    }
+    return out;
   }
 
   function buildMarkKindChips() {
@@ -2183,6 +2348,41 @@
   // ---------------------------------------------------------------
   // タブ
   // ---------------------------------------------------------------
+  // ---- Androidの戻るボタン ----
+  // ホーム画面から起動していると、戻るを押した時点で何も言わずアプリが閉じる。
+  // 履歴にダミーを1つ積んでおき、戻るが来たら「閉じる」の前に段階的に畳む。
+  //   1. 記録シートが開いていれば閉じる
+  //   2. 場所検索の候補が開いていれば閉じる
+  //   3. 地図タブ以外なら地図へ戻る
+  //   4. それでも戻るなら、閉じてよいか確認する
+  function pushBackGuard() {
+    try { history.pushState({ mlGuard: true }, ''); } catch (e) { /* 何もしない */ }
+  }
+
+  function initBackGuard() {
+    pushBackGuard();
+    window.addEventListener('popstate', () => {
+      const sheet = $('#sheet');
+      if (sheet && sheet.classList.contains('is-open')) {
+        closeSheet(); pushBackGuard(); return;
+      }
+      const hits = $('#map-hits');
+      if (hits && !hits.hidden) {
+        hits.hidden = true; hits.innerHTML = ''; pushBackGuard(); return;
+      }
+      const active = document.querySelector('.tab.is-active');
+      if (active && active.dataset.tab !== 'map') {
+        switchTab('map'); pushBackGuard(); return;
+      }
+      if (confirm('めぐログを閉じますか？')) {
+        // ダミーはもう消えているので、ここで戻るとアプリから出る
+        history.back();
+      } else {
+        pushBackGuard();
+      }
+    });
+  }
+
   function switchTab(name) {
     $$('.tab').forEach((b) => b.classList.toggle('is-active', b.dataset.tab === name));
     $$('.panel').forEach((p) => p.classList.toggle('is-active', p.id === 'panel-' + name));
@@ -2200,6 +2400,7 @@
 
   function initTabs() {
     $$('.tab').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
+    initBackGuard();
 
     let timer = null;
     const onFilter = () => { clearTimeout(timer); timer = setTimeout(renderList, 180); };
