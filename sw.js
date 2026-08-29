@@ -5,7 +5,7 @@
    index.html / css / js / data を変更したら、必ず VERSION を上げること。
    上げないと、既に開いたことのある端末は古いキャッシュを返し続け、
    修正がいつまでも届かない（Service Workerは sw.js 自体が変わったときだけ再インストールされる）。 */
-const VERSION = 'v28';
+const VERSION = 'v29';
 const SHELL = 'meguri-shell-' + VERSION;
 const TILES = 'meguri-tiles-' + VERSION;
 const TILE_LIMIT = 400;

@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v28';
+  const APP_VERSION = 'v29';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -40,7 +40,10 @@
     { key: 'shrine',mark: '⛩️', label: '神社' },
     { key: 'temple',mark: '📿', label: 'お寺' },
     { key: 'shop',  mark: '🛍️', label: '買い物' },
+    { key: 'conv',  mark: '🏪', label: 'コンビニ' },
     { key: 'food',  mark: '🍽️', label: '食事' },
+    { key: 'michi', mark: '🛣️', label: '道の駅' },
+    { key: 'sapa',  mark: '🅿️', label: 'SA・PA' },
     { key: 'home',  mark: '🏠', label: '帰省' },
     { key: 'other', mark: '✳️', label: 'その他' },
   ];
@@ -631,7 +634,7 @@
   function groupByPlace(visits) {
     const NEAR = 50;                        // メートル
     const named = new Map();
-    const anon = [];
+    const rest = [];
 
     const sorted = visits.slice().sort((a, b) => visitStamp(b).localeCompare(visitStamp(a)));
     for (const v of sorted) {
@@ -640,12 +643,35 @@
         if (!named.has(name)) named.set(name, { name, lat: v.coords.lat, lng: v.coords.lng, items: [] });
         named.get(name).items.push(v);
       } else {
-        const near = anon.find((g) => distMeters(g.lat, g.lng, v.coords.lat, v.coords.lng) <= NEAR);
-        if (near) near.items.push(v);
-        else anon.push({ name: '', lat: v.coords.lat, lng: v.coords.lng, items: [v] });
+        rest.push(v);
       }
     }
-    return Array.from(named.values()).concat(anon);
+
+    // 名前を入れるのは初回だけで、2回目からは日時だけ記録する——という使い方が
+    // 実際に多い。名前あり・なしを完全に分けると、2回目以降が別のピンになり、
+    // 場所の名前ではなく市区町村名で表示されてしまう。
+    // そこで、名前なしの記録は近く(50m以内)に名前付きの場所があればそこへ寄せる。
+    // 一番近いものを選ぶので、同じ建物に別の店を登録していても取り違えにくい。
+    const groups = Array.from(named.values());
+    const anon = [];
+    for (const v of rest) {
+      let best = null, bestD = NEAR;
+      for (const g of groups) {
+        const d = distMeters(g.lat, g.lng, v.coords.lat, v.coords.lng);
+        if (d <= bestD) { best = g; bestD = d; }
+      }
+      if (best) { best.items.push(v); continue; }
+      const near = anon.find((g) => distMeters(g.lat, g.lng, v.coords.lat, v.coords.lng) <= NEAR);
+      if (near) near.items.push(v);
+      else anon.push({ name: '', lat: v.coords.lat, lng: v.coords.lng, items: [v] });
+    }
+
+    // 寄せたぶんが末尾に付くので、各グループを新しい順に整え直す。
+    // 吹き出しは items[0] を最新として扱うため、ここが崩れると表示がずれる。
+    for (const g of groups) {
+      g.items.sort((a, b) => visitStamp(b).localeCompare(visitStamp(a)));
+    }
+    return groups.concat(anon);
   }
 
   // 2点間のおおよその距離（メートル）
@@ -682,7 +708,10 @@
     if (g.items.length > 1) {
       const c = document.createElement('div');
       c.className = 'pinpop__date';
-      c.textContent = g.items.length + '回訪問';
+      // 何度も買い物する場所は、回数だけでなく合計いくら使ったかが知りたい
+      const sum = g.items.reduce((n, it) => n + (Number(it.amount) || 0), 0);
+      c.textContent = g.items.length + '回訪問'
+        + (sum > 0 ? ' ・ 合計 ¥' + sum.toLocaleString('ja-JP') : '');
       box.appendChild(c);
     }
 
@@ -693,9 +722,27 @@
     for (const item of g.items.slice(0, SHOW)) {
       const li = document.createElement('li');
       li.className = 'pinpop__time';
+
+      // 金額と御朱印は訪問ごとの情報なので、その回の行に出す。
+      // 以前は最新1件ぶんだけを吹き出しの下にまとめて出しており、
+      // 同じ場所に何度も来ていると、どの回のものか分からなかった。
+      const main = document.createElement('div');
+      main.className = 'pinpop__timeMain';
       const when = document.createElement('span');
+      when.className = 'pinpop__when';
       when.textContent = visitLabel(item);
-      li.appendChild(when);
+      main.appendChild(when);
+
+      const bits = [];
+      if (Number(item.amount) > 0) bits.push('¥' + Number(item.amount).toLocaleString('ja-JP'));
+      if (item.goshuin && item.goshuin.name) bits.push('御朱印: ' + item.goshuin.name);
+      if (bits.length) {
+        const meta = document.createElement('span');
+        meta.className = 'pinpop__meta';
+        meta.textContent = bits.join(' ・ ');
+        main.appendChild(meta);
+      }
+      li.appendChild(main);
       const edit = document.createElement('button');
       edit.type = 'button';
       edit.className = 'linkbtn';
@@ -716,17 +763,22 @@
       box.appendChild(more);
     }
 
-    if (v.goshuin && v.goshuin.name) {
-      const gs = document.createElement('div');
-      gs.className = 'pinpop__goshuin';
-      gs.textContent = '御朱印: ' + v.goshuin.name;
-      box.appendChild(gs);
-    }
-    if (v.memo) {
-      const memo = document.createElement('div');
-      memo.className = 'pinpop__memo';
-      memo.textContent = v.memo;
-      box.appendChild(memo);
+    // 1回だけの場所は、御朱印とメモをそのまま下に出す。
+    // 複数回の場所では上の行ごとの表示に任せる（最新1件だけ出すと
+    // 他の回のものと取り違える）。各回の詳しい中身は行の「編集」から見る。
+    if (g.items.length === 1) {
+      if (v.goshuin && v.goshuin.name) {
+        const gs = document.createElement('div');
+        gs.className = 'pinpop__goshuin';
+        gs.textContent = '御朱印: ' + v.goshuin.name;
+        box.appendChild(gs);
+      }
+      if (v.memo) {
+        const memo = document.createElement('div');
+        memo.className = 'pinpop__memo';
+        memo.textContent = v.memo;
+        box.appendChild(memo);
+      }
     }
 
     const btn = document.createElement('button');
