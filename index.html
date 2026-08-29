@@ -200,10 +200,12 @@
     <!-- 御朱印は項目が独特なので独立させる。神社・お寺のときだけ開けばよい。 -->
     <div class="field">
       <button type="button" class="folder" id="goshuin-toggle">
-        <i class="folder__caret"></i>御朱印（任意）
+        <i class="folder__caret"></i>御朱印・御城印など（任意）
       </button>
       <div class="folder__body" id="goshuin-body" hidden>
-        <label class="mini2"><small>いただいた御朱印の名称</small>
+        <div class="mini2"><small>種類</small>
+          <div class="days" id="gs-kind"></div></div>
+        <label class="mini2"><small>いただいたものの名称</small>
           <input type="text" id="gs-name" placeholder="例: 御本尊、限定御朱印 など"></label>
         <div class="mini2"><small>書き方</small>
           <div class="days" id="gs-write"></div></div>

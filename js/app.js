@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v29';
+  const APP_VERSION = 'v30';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -44,12 +44,18 @@
     { key: 'food',  mark: '🍽️', label: '食事' },
     { key: 'michi', mark: '🛣️', label: '道の駅' },
     { key: 'sapa',  mark: '🅿️', label: 'SA・PA' },
+    { key: 'mtn',   mark: '⛰️', label: '山・登山' },
+    { key: 'onsen', mark: '♨️', label: '温泉' },
     { key: 'home',  mark: '🏠', label: '帰省' },
     { key: 'other', mark: '✳️', label: 'その他' },
   ];
   const tagOf = (k) => TAGS.find((t) => t.key === (k || '')) || TAGS[0];
 
   const DAYS = ['月', '火', '水', '木', '金', '土', '日', '不定休'];
+  // 集めるものは御朱印だけではない。御城印・御船印なども同じ枠で記録する。
+  // 既存の記録には kind が無いので、未設定は「御朱印」として扱う（GS_KIND[0]）。
+  const GS_KIND = ['御朱印', '御城印', '御船印', '鉄印', 'その他'];
+  const gsKindOf = (g) => (g && g.kind) || GS_KIND[0];
   const GS_WRITE = ['直書き', '書き置き'];
   const GS_FORM = ['通常', '見開き', '切り絵'];
 
@@ -313,15 +319,26 @@
     'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
   ];
   const OVERPASS_TIMEOUT = 15000;
+  const MARK_LIMIT = 500;                   // 1回に受け取る上限。多すぎると地図が重い
+  // OSMは有志が編集しているので、タグの付け方に揺れがある。条件を厳しくすると
+  // 「知っている場所が出ない」が起きるため、実際に使われている書き方を広めに拾う。
+  // qs は Overpass のクエリ。同じ文字列は1回にまとめて投げる（神社とお寺は同じ問い合わせ）。
   const MARK_KINDS = [
     { key: 'castle', mark: '🏯', label: '城',   tag: 'castle',
-      q: 'nwr["historic"="castle"]' },
+      qs: ['nwr["historic"~"^(castle|fort)$"]', 'nwr["ruins"="castle"]'] },
     { key: 'statn',  mark: '🚉', label: '駅',   tag: 'statn',
-      q: 'nwr["railway"="station"]' },
+      qs: ['nwr["railway"~"^(station|halt)$"]'] },
+    // religion の付け忘れが多いので、religion では絞らずに取ってきて kindOf で振り分ける
     { key: 'shrine', mark: '⛩️', label: '神社', tag: 'shrine',
-      q: 'nwr["amenity"="place_of_worship"]["religion"="shinto"]' },
+      qs: ['nwr["amenity"="place_of_worship"]'] },
     { key: 'temple', mark: '📿', label: 'お寺', tag: 'temple',
-      q: 'nwr["amenity"="place_of_worship"]["religion"="buddhist"]' },
+      qs: ['nwr["amenity"="place_of_worship"]'] },
+    { key: 'mtn',    def: false, mark: '⛰️', label: '山',   tag: 'mtn',
+      qs: ['nwr["natural"~"^(peak|volcano)$"]'] },
+    { key: 'onsen',  def: false, mark: '♨️', label: '温泉', tag: 'onsen',
+      qs: ['nwr["natural"="hot_spring"]', 'nwr["amenity"="public_bath"]'] },
+    { key: 'dam', def: false,    mark: '🌊', label: 'ダム', tag: 'dam',
+      qs: ['nwr["waterway"="dam"]'] },
   ];
 
   async function fetchLandmarks(bounds) {
@@ -331,9 +348,12 @@
     // 選んだ種類だけ問い合わせる。表示が減るだけでなく通信量と待ち時間も減る。
     const kinds = MARK_KINDS.filter((k) => !state.markKinds || state.markKinds.has(k.key));
     if (!kinds.length) return [];
+    // 神社とお寺は同じ問い合わせなので、重複を除いて1回だけ投げる
+    const qs = [];
+    for (const k of kinds) for (const q of k.qs) if (!qs.includes(q)) qs.push(q);
     const body = '[out:json][timeout:25];(' +
-      kinds.map((k) => k.q + bbox + ';').join('') +
-      ');out center tags 200;';
+      qs.map((q) => q + bbox + ';').join('') +
+      ');out center tags ' + MARK_LIMIT + ';';
 
     for (const url of OVERPASS) {
       // fetchは放っておくと待ち続けるので、必ず打ち切る
@@ -360,11 +380,13 @@
   function buildMarkKindChips() {
     const box = $('#mark-kinds');
     if (!box || box.childElementCount) return;
-    state.markKinds = new Set(MARK_KINDS.map((k) => k.key));
+    // 後から足した種類は既定でオフ。全部オンにすると件数が増えて上限に当たりやすく、
+    // 「一部だけ表示しています」の通知が毎回出て煩わしいため。必要な人が押して出す。
+    state.markKinds = new Set(MARK_KINDS.filter((k) => k.def !== false).map((k) => k.key));
     MARK_KINDS.forEach((k) => {
       const b = document.createElement('button');
       b.type = 'button';
-      b.className = 'mkchip is-on';
+      b.className = 'mkchip' + (k.def === false ? '' : ' is-on');
       b.dataset.kind = k.key;
       b.innerHTML = '<span>' + k.mark + '</span>' + k.label;
       b.addEventListener('click', () => {
@@ -379,12 +401,27 @@
     });
   }
 
+  const kindByKey = (k) => MARK_KINDS.find((x) => x.key === k) || null;
+
   function kindOf(tags) {
     if (!tags) return null;
-    if (tags.historic === 'castle') return MARK_KINDS[0];
-    if (tags.railway === 'station') return MARK_KINDS[1];
-    if (tags.religion === 'shinto') return MARK_KINDS[2];
-    if (tags.religion === 'buddhist') return MARK_KINDS[3];
+    if (tags.historic === 'castle' || tags.historic === 'fort' || tags.ruins === 'castle') {
+      return kindByKey('castle');
+    }
+    if (tags.railway === 'station' || tags.railway === 'halt') return kindByKey('statn');
+    if (tags.natural === 'peak' || tags.natural === 'volcano') return kindByKey('mtn');
+    if (tags.natural === 'hot_spring' || tags.amenity === 'public_bath') return kindByKey('onsen');
+    if (tags.waterway === 'dam') return kindByKey('dam');
+    if (tags.amenity === 'place_of_worship' || tags.religion) {
+      if (tags.religion === 'shinto') return kindByKey('shrine');
+      if (tags.religion === 'buddhist') return kindByKey('temple');
+      // religion が付いていない社寺が多いので、名前から見当をつける。
+      // 判断できないものは出さない（キリスト教会などを混ぜないため）。
+      const n = tags.name || '';
+      if (/神社|神宮|八幡|稲荷|天満|大社|東照宮|宮$/.test(n)) return kindByKey('shrine');
+      if (/寺|院|庵|大師|観音|不動尊|薬師/.test(n)) return kindByKey('temple');
+      return null;
+    }
     return null;
   }
 
@@ -433,6 +470,10 @@
       }
       state.markCache = els;
       state.markCacheKinds = want;
+      // 上限で打ち切られると黙って一部が消える。気づけないと「出ない」と誤解するので伝える。
+      if (els.length >= MARK_LIMIT) {
+        toast('この範囲は数が多いため一部だけ表示しています。地図を拡大すると全部出ます');
+      }
     }
 
     if (state.marks) { state.map.removeLayer(state.marks); state.marks = null; }
@@ -735,7 +776,7 @@
 
       const bits = [];
       if (Number(item.amount) > 0) bits.push('¥' + Number(item.amount).toLocaleString('ja-JP'));
-      if (item.goshuin && item.goshuin.name) bits.push('御朱印: ' + item.goshuin.name);
+      if (item.goshuin && item.goshuin.name) bits.push(gsKindOf(item.goshuin) + ': ' + item.goshuin.name);
       if (bits.length) {
         const meta = document.createElement('span');
         meta.className = 'pinpop__meta';
@@ -770,7 +811,7 @@
       if (v.goshuin && v.goshuin.name) {
         const gs = document.createElement('div');
         gs.className = 'pinpop__goshuin';
-        gs.textContent = '御朱印: ' + v.goshuin.name;
+        gs.textContent = gsKindOf(v.goshuin) + ': ' + v.goshuin.name;
         box.appendChild(gs);
       }
       if (v.memo) {
@@ -1234,6 +1275,7 @@
         box.appendChild(b);
       });
     };
+    mkPicker('#gs-kind', GS_KIND);
     mkPicker('#gs-write', GS_WRITE);
     mkPicker('#gs-form', GS_FORM);
 
@@ -1285,6 +1327,7 @@
     g = g || {};
     $('#gs-name').value = g.name || '';
     $('#gs-limited').checked = !!g.limited;
+    $$('#gs-kind .day').forEach((b) => b.classList.toggle('is-on', b.dataset.v === gsKindOf(g)));
     $$('#gs-write .day').forEach((b) => b.classList.toggle('is-on', b.dataset.v === g.write));
     $$('#gs-form .day').forEach((b) => b.classList.toggle('is-on', b.dataset.v === g.form));
     const any = g.name || g.write || g.form || g.limited;
@@ -1294,14 +1337,17 @@
   }
 
   function getGoshuin() {
+    const k = $('#gs-kind .day.is-on');
     const w = $('#gs-write .day.is-on');
     const f = $('#gs-form .day.is-on');
     const g = {
+      kind: k ? k.dataset.v : '',
       name: $('#gs-name').value.trim(),
       write: w ? w.dataset.v : '',
       form: f ? f.dataset.v : '',
       limited: $('#gs-limited').checked,
     };
+    // 種類だけ選んで他が空、というのは記録として意味がないので拾わない
     return (g.name || g.write || g.form || g.limited) ? g : null;
   }
 
@@ -1789,7 +1835,7 @@
     if (v.goshuin && v.goshuin.name) {
       const gn = document.createElement('p');
       gn.className = 'hcard__goshuin';
-      gn.textContent = '御朱印: ' + v.goshuin.name;
+      gn.textContent = gsKindOf(v.goshuin) + ': ' + v.goshuin.name;
       card.appendChild(gn);
     }
 
@@ -2062,6 +2108,10 @@
     if (gs.length) {
       const cnt = function (pred) { return gs.filter(pred).length; };
       const rows = [['いただいた数', gs.length + ' 体']];
+      GS_KIND.forEach(function (k) {
+        const n = cnt(function (v) { return gsKindOf(v.goshuin) === k; });
+        if (n) rows.push([k, n + ' 体']);
+      });
       GS_WRITE.forEach(function (w) {
         const n = cnt(function (v) { return v.goshuin.write === w; });
         if (n) rows.push([w, n + ' 体']);
@@ -2072,7 +2122,7 @@
       });
       const lim = cnt(function (v) { return v.goshuin.limited; });
       if (lim) rows.push(['限定', lim + ' 体']);
-      card('御朱印', rows);
+      card('御朱印・御城印など', rows);
     }
 
     // また行きたい／高評価
