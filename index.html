@@ -66,6 +66,8 @@
     <button type="button" id="btn-search-area" class="searcharea" hidden>この範囲で探す</button>
     <!-- 集めるリストを地図に出しているときだけ出る。消し方が分からなくならないように -->
     <button type="button" id="btn-col-clear" class="colclear" hidden></button>
+    <!-- 記録中であることが常に見えていないと、切り忘れて電池を食う -->
+    <div id="trackbar" class="trackbar" hidden></div>
     <!-- 表示の切り替えは1枚にまとめる。
          アイコンのボタンを縦に並べていたが、4つ＋2つで約290pxになり、
          地図の最小の高さ(320px)とほぼ同じ。狭い端末では右端がボタンで埋まっていた。 -->
@@ -77,6 +79,8 @@
       <button type="button" class="layers__row is-off" id="btn-marks"><span>🏯</span>ランドマーク<small>通信します</small></button>
       <p class="layers__h">地図の種類</p>
       <div class="layers__styles" id="map-styles"></div>
+      <p class="layers__h">移動の記録</p>
+      <button type="button" class="layers__row is-off" id="btn-track"><span>🚗</span>移動を記録<small>画面を消さずに</small></button>
     </div>
     <!-- 「移動するだけ」と「記録する」は別の操作。
          地図で他の場所を見ているときに現在地へ戻りたいだけ、という場面が多いため分けている。 -->
@@ -247,6 +251,18 @@
 
     <!-- 使うタグを自分で間引く。タグは人によって使うものが全く違うので、
          全部並べると記録画面が10行になってメモ欄が画面の外に出る。 -->
+    <div class="card">
+      <h2>移動の記録</h2>
+      <p class="muted">地図の「表示」から<b>「移動を記録」</b>を入れると、通った市区町村が
+        自動で<b>薄い色</b>に塗られます。行った場所（濃い色）とは分けています。</p>
+      <label class="filter__only"><input type="checkbox" id="track-counts"> 通ったところも制覇に数える</label>
+      <p class="warn"><b>アプリを開いたまま・画面をつけたままでないと追えません。</b>
+        Webの仕組み上、アプリを閉じている間の位置は取れないためです（画面が消えないようにはしています）。
+        ほかのアプリに切り替えると止まります。<b>電池を使うので、使い終わったら切ってください。</b></p>
+      <p class="muted">車のホルダーに置く・電車で移動する、といった使い方に向いています。</p>
+      <button id="btn-track-clear" class="btn btn--sub btn--slim">通った印を消す</button>
+    </div>
+
     <div class="card">
       <h2>使うタグを選ぶ</h2>
       <p class="muted">記録画面に出すタグを選べます。<b>外しても、そのタグで保存した記録は消えません。</b><br>

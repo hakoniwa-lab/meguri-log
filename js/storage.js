@@ -180,12 +180,30 @@ const Store = (() => {
         const need = new Set(visits.map((v) => v.spotId));
         spots = allSpots.filter((sp) => need.has(sp.id));
       }
-      return {
+      // ★覚え書き(meta)も全部の書き出しには入れる★
+      // 通った市区町村・集めるリストの手チェック・自分で作ったリストは meta にある。
+      // 入れないと、機種変したときにそれだけ消える（実際に抜けていた）。
+      // 一部だけの書き出し（人に渡す用）には入れない。設定まで渡す必要はない。
+      const out = {
         app: 'meguri-log',
         version: 1,
         exportedAt: new Date().toISOString(),
         visits, spots, photos,
       };
+      if (!visitFilter) out.meta = await this.exportMeta();
+      return out;
+    },
+
+    // 持ち出す覚え書き。lastBackup はその端末の事情なので持ち出さない。
+    async exportMeta() {
+      const keys = ['passed', 'passedCounts', 'collectDone', 'collectExtra',
+                    'collections', 'hiddenTags', 'mapStyle'];
+      const out = {};
+      for (const k of keys) {
+        const v = await this.getMeta(k);
+        if (v !== null && v !== undefined) out[k] = v;
+      }
+      return out;
     },
 
     async importAll(data, { merge = true } = {}) {
@@ -206,6 +224,15 @@ const Store = (() => {
         t.objectStore('photos').put({ id: p.id, blob: base64ToBlob(p.data, p.type), type: p.type });
       }
       await new Promise((res, rej) => { t.oncomplete = res; t.onerror = () => rej(t.error); });
+
+      // 覚え書きは上書きで戻す（機種変で移すのが目的なので、古い端末の状態に合わせる）
+      const meta = data.meta;
+      if (meta && typeof meta === 'object') {
+        const mt = tx(['meta'], 'readwrite');
+        const ms = mt.objectStore('meta');
+        Object.keys(meta).forEach((k) => ms.put({ key: k, value: meta[k] }));
+        await new Promise((res) => { mt.oncomplete = res; });
+      }
       return {
         visits: (data.visits || []).length,
         spots: (data.spots || []).length,

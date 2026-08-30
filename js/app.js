@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v42';
+  const APP_VERSION = 'v43';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -133,6 +133,15 @@
     pickTimer: null,
     pickSeq: 0,
     hiddenTags: new Set(),   // 記録画面に出さないタグ（設定で選ぶ）
+    tracking: false,         // 移動記録モード
+    trackWatch: null,
+    wakeLock: null,
+    passed: new Set(),       // 通っただけの市区町村
+    passedPref: new Set(),
+    passedCounts: false,     // 通過を制覇に数えるか
+    trackCount: 0,
+    trackLast: '',
+    lastTrack: null,
     collections: null,       // 同梱の集めるリスト（初回に読む）
     customCols: [],          // 自分で作ったリスト
     curCol: null,            // いま開いているリスト
@@ -191,6 +200,7 @@
     await Store.init();
     state.mapStyle = (await Store.getMeta('mapStyle')) || 'osm';
     state.hiddenTags = new Set((await Store.getMeta('hiddenTags')) || []);
+    await loadPassed();
     state.geo.pref = sortByCode(await fetch(LEVELS.pref.file).then((r) => r.json()));
     await refreshVisited();
 
@@ -201,6 +211,7 @@
     initHistory();
     initSettings();
     initCollect();
+    initTracking();
     renderList();
     renderProgress();
     initServiceWorker();
@@ -224,6 +235,12 @@
       if (v.address && v.address.lv01Nm) {
         chome.add((v.address.muniCd || '') + '/' + v.address.lv01Nm);
       }
+    }
+    // 「通ったところも制覇に数える」を選んでいれば、ここで足す。
+    // 表示の色は styleFor で別に分けているので、薄い色のまま数だけ増える。
+    if (state.passedCounts) {
+      for (const id of state.passed) city.add(id);
+      for (const id of state.passedPref) pref.add(id);
     }
     state.visited.pref = pref;
     state.visited.city = city;
@@ -443,12 +460,16 @@
     if (!state.fillOn) {
       return { color: '#2c3e62', weight: 0.5, opacity: 0.3, fillOpacity: 0 };
     }
-    const done = state.visited[state.level].has(spotIdOf(state.level, feat.properties.code));
+    const id = spotIdOf(state.level, feat.properties.code);
+    const done = state.visited[state.level].has(id);
+    // 「通っただけ」は薄い色にする。行った所と同じ色にすると、
+    // 新幹線で通過しただけの県が制覇済みに見えてしまう。
+    const passed = !done && passedSet(state.level).has(id);
     return {
       color: '#2c3e62',
       weight: state.level === 'city' ? 0.5 : 1,
-      fillColor: done ? '#e8a33d' : '#c9d2e0',
-      fillOpacity: done ? 0.75 : 0.35,
+      fillColor: done ? '#e8a33d' : (passed ? '#f0cf9a' : '#c9d2e0'),
+      fillOpacity: done ? 0.75 : (passed ? 0.6 : 0.35),
     };
   }
 
@@ -2958,6 +2979,157 @@
     if (fi) fi.addEventListener('input', onFilter);
     const ot = $('#only-todo');
     if (ot) ot.addEventListener('change', renderList);
+  }
+
+  // ---------------------------------------------------------------
+  // 移動記録モード
+  // ---------------------------------------------------------------
+  // ★アプリを閉じたまま裏で位置を追うことはWebではできない★
+  // Service Worker（閉じても動く仕組み）の中に geolocation が存在しない。
+  // プッシュ等で起こせても、起きた先で位置を取る手段が無い。ネイティブ専用の機能。
+  //
+  // できるのは「画面が点いている間だけ追う」こと。
+  // Screen Wake Lock で画面を消させないので、車のホルダーに置く・電車で移動する
+  // といった使い方なら実用になる。他のアプリに切り替えると止まる。
+  //
+  // 精度は要らない（市区町村が分かればよい）。enableHighAccuracy を false にすると
+  // GPSを回しっぱなしにせず基地局・Wi-Fiで済ませられるので、電池の持ちが全く違う。
+  const TRACK_OPTS = { enableHighAccuracy: false, maximumAge: 15000, timeout: 30000 };
+  // 前回から動いていないときに何度も判定しない距離
+  const TRACK_MIN_MOVE = 150;
+
+  async function loadPassed() {
+    const saved = (await Store.getMeta('passed')) || [];
+    state.passed = new Set(saved);
+    state.passedCounts = !!(await Store.getMeta('passedCounts'));
+    rebuildPassedPref();
+  }
+
+  // 市区町村の通過から、都道府県の通過を作る（記録と同じ考え方）
+  function rebuildPassedPref() {
+    const pref = new Set();
+    for (const id of state.passed) {
+      const code = String(id).replace(/^city-/, '');
+      if (code.length >= 2) pref.add('pref-' + parseInt(code.slice(0, 2), 10));
+    }
+    state.passedPref = pref;
+  }
+
+  const passedSet = (lv) => (lv === 'city' ? state.passed : state.passedPref);
+
+  async function startTracking() {
+    if (!navigator.geolocation) { toast('この端末では位置情報が使えません'); return; }
+    // 市区町村の判定に要るので、先に読んでおく
+    if (!(await ensureLevelData('city'))) { toast('市区町村の地図が読めませんでした'); return; }
+
+    state.tracking = true;
+    state.trackCount = 0;
+    state.lastTrack = null;
+    await grabWakeLock();
+    // 画面を切り替えて戻ると Wake Lock は外れる。戻ったら取り直す
+    document.addEventListener('visibilitychange', onTrackVisibility);
+    state.trackWatch = navigator.geolocation.watchPosition(onTrackPos, onTrackErr, TRACK_OPTS);
+    setToggle('#btn-track', true);
+    renderTrackBar();
+    toast('移動の記録を始めました。画面はつけたままにしてください');
+  }
+
+  async function stopTracking() {
+    state.tracking = false;
+    if (state.trackWatch != null) { navigator.geolocation.clearWatch(state.trackWatch); state.trackWatch = null; }
+    document.removeEventListener('visibilitychange', onTrackVisibility);
+    if (state.wakeLock) { try { await state.wakeLock.release(); } catch (e) { /* もう外れている */ } }
+    state.wakeLock = null;
+    setToggle('#btn-track', false);
+    renderTrackBar();
+    toast('移動の記録を止めました');
+  }
+
+  async function grabWakeLock() {
+    if (!navigator.wakeLock) return;          // 使えない端末もある。無くても動く
+    try { state.wakeLock = await navigator.wakeLock.request('screen'); } catch (e) { state.wakeLock = null; }
+  }
+
+  function onTrackVisibility() {
+    if (state.tracking && document.visibilityState === 'visible') grabWakeLock();
+  }
+
+  async function onTrackPos(pos) {
+    if (!state.tracking) return;
+    const lat = pos.coords.latitude, lng = pos.coords.longitude;
+    // 同じ場所に留まっている間は判定しない
+    if (state.lastTrack && distMeters(state.lastTrack.lat, state.lastTrack.lng, lat, lng) < TRACK_MIN_MOVE) return;
+    state.lastTrack = { lat: lat, lng: lng };
+
+    const f = findAt('city', lat, lng);
+    if (!f) return;                            // 海の上・国外
+    const id = spotIdOf('city', f.properties.code);
+    if (state.passed.has(id) || state.visited.city.has(id)) {
+      state.trackLast = f.properties.name;
+      renderTrackBar();
+      return;
+    }
+    state.passed.add(id);
+    state.trackCount++;
+    state.trackLast = f.properties.name;
+    rebuildPassedPref();
+    await Store.setMeta('passed', Array.from(state.passed));
+    if (state.layer) state.layer.setStyle(styleFor);
+    renderProgress();
+    renderTrackBar();
+  }
+
+  function onTrackErr(err) {
+    if (!state.tracking) return;
+    // 一時的に取れないだけのことが多いので止めない。権限を切られたときだけ止める
+    if (err && err.code === 1) {
+      toast('位置情報が許可されていないため止めました');
+      stopTracking();
+    }
+  }
+
+  function renderTrackBar() {
+    const bar = $('#trackbar');
+    if (!bar) return;
+    bar.hidden = !state.tracking;
+    if (!state.tracking) return;
+    const n = state.trackCount || 0;
+    bar.innerHTML = '<span class="trackbar__dot"></span>'
+      + '<b>移動を記録中</b>'
+      + '<small>' + (n ? '新しく ' + n + ' か所' : 'まだ新しい場所はありません')
+      + (state.trackLast ? '（' + escapeHtml(state.trackLast) + '）' : '') + '</small>'
+      + '<i class="trackbar__stop">やめる</i>';
+    const stop = bar.querySelector('.trackbar__stop');
+    if (stop) stop.addEventListener('click', (e) => { e.stopPropagation(); stopTracking(); });
+  }
+
+  function initTracking() {
+    const b = $('#btn-track');
+    if (!b) return;
+    setToggle('#btn-track', false);
+    b.addEventListener('click', () => (state.tracking ? stopTracking() : startTracking()));
+
+    const c = $('#track-counts');
+    if (c) {
+      c.checked = !!state.passedCounts;
+      c.addEventListener('change', async () => {
+        state.passedCounts = c.checked;
+        await Store.setMeta('passedCounts', c.checked);
+        await refreshVisited();
+        refreshMap(); renderProgress(); renderList();
+      });
+    }
+    const clr = $('#btn-track-clear');
+    if (clr) clr.addEventListener('click', async () => {
+      if (!state.passed.size) { toast('通った記録はまだありません'); return; }
+      if (!confirm('通った印を全部消しますか？\n記録そのものは消えません。')) return;
+      state.passed = new Set();
+      rebuildPassedPref();
+      await Store.setMeta('passed', []);
+      await refreshVisited();
+      refreshMap(); renderProgress(); renderList();
+      toast('消しました');
+    });
   }
 
   // ---------------------------------------------------------------
