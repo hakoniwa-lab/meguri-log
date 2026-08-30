@@ -655,13 +655,28 @@ a{color:var(--navy)}
   display:flex; align-items:center; gap:8px;
 }
 .citem__go:active{background:var(--bg)}
+/* 丸は押せる。手で「行った」を付けるため（昔行った分は記録が無い） */
 .citem__chk{
-  flex:0 0 auto; width:20px; height:20px; border-radius:50%; border:1.5px solid var(--line);
+  flex:0 0 auto; align-self:center; margin-left:12px;
+  width:24px; height:24px; border-radius:50%; border:1.5px solid var(--line);
   display:inline-flex; align-items:center; justify-content:center;
-  font-size:12px; font-weight:700; color:#fff;
+  font-size:13px; font-weight:700; color:#fff; background:#fff; cursor:pointer; padding:0;
 }
 .citem.is-done .citem__chk{background:var(--amber); border-color:var(--amber)}
+/* 手で付けたものは、記録から見つかったものと見分けが付くようにする */
+.citem .citem__chk.is-hand{background:#fff; color:var(--amber); border-color:var(--amber)}
 .citem.is-done .citem__go{color:var(--muted)}
+.citem__no{
+  flex:0 0 auto; min-width:26px; font-size:11.5px; font-weight:700;
+  color:var(--muted); font-variant-numeric:tabular-nums;
+}
+.citem__mine{margin-left:6px; font-size:10.5px; font-style:normal; color:var(--amber); font-weight:700}
+.citem__del{
+  flex:0 0 auto; align-self:center; margin:0 10px; width:28px; height:28px;
+  border:0; border-radius:50%; background:none; color:var(--muted);
+  font-size:18px; line-height:1; cursor:pointer;
+}
+.citem__del:active{background:var(--bg)}
 
 /* 地図に出しているリストを消すボタン。出しっぱなしで消し方が分からなくならないように */
 .colclear{
@@ -671,4 +686,16 @@ a{color:var(--navy)}
   background:var(--navy); color:#fff; cursor:pointer;
   box-shadow:0 3px 12px rgba(20,30,50,.25); max-width:calc(100% - 28px);
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+
+/* 集めるリストの区分見出し。巡礼は地域ごとに無数にあるので、ただ並べると探せない */
+.cgroup{
+  margin:0; padding:12px 14px 6px; font-size:11.5px; font-weight:700;
+  color:var(--muted); background:var(--bg); border-bottom:1px solid var(--line);
+}
+.ccard__area{
+  margin-left:8px; padding:1px 7px; border-radius:99px;
+  background:var(--bg); border:1px solid var(--line);
+  font-size:10.5px; font-style:normal; font-weight:700; color:var(--muted);
+  vertical-align:middle;
 }

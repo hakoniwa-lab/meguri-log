@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v36';
+  const APP_VERSION = 'v37';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -2977,6 +2977,7 @@
     { id: 'shikoku88',  file: './data/collections/shikoku88.json' },
     { id: 'saikoku33',  file: './data/collections/saikoku33.json' },
     { id: 'bando33',    file: './data/collections/bando33.json' },
+    { id: 'chichibu34', file: './data/collections/chichibu34.json' },
     { id: 'meisui100',  file: './data/collections/meisui100.json' },
     { id: 'taki100',    file: './data/collections/taki100.json' },
   ];
@@ -3007,38 +3008,63 @@
     await Store.setMeta('collections', list);
   }
 
-  // その項目に行ったか。名前が一致するか、近くに記録があれば「行った」。
+  // その項目に行ったか。記録から自動で見つかったか、手で付けたか。
   // 名前は完全一致だけだと拾えない（「姫路城」と「国宝 姫路城」）ので、
   // どちらかがどちらかを含んでいれば同じものとして扱う。
-  function visitedItem(item, visits) {
+  // 返す値: '' / 'auto'（記録がある） / 'hand'（手で付けた）
+  function visitedItem(item, visits, hand) {
     const nm = (item.name || '').trim();
     for (const v of visits) {
       const vn = (v.place && v.place.name || '').trim();
       if (nm && vn && (vn === nm || (nm.length >= 3 && vn.indexOf(nm) >= 0)
-          || (vn.length >= 3 && nm.indexOf(vn) >= 0))) return true;
+          || (vn.length >= 3 && nm.indexOf(vn) >= 0))) return 'auto';
       if (v.coords && typeof v.coords.lat === 'number'
-          && distMeters(v.coords.lat, v.coords.lng, item.lat, item.lng) <= COLLECT_NEAR) return true;
+          && distMeters(v.coords.lat, v.coords.lng, item.lat, item.lng) <= COLLECT_NEAR) return 'auto';
     }
-    return false;
+    // ★手で付けたぶん★ 昔に行ったが記録していない、というのが普通にある。
+    // 自動判定だけだと、その分は永久に埋まらない。
+    return (hand && hand.indexOf(nm) >= 0) ? 'hand' : '';
   }
 
-  function collectStats(col, visits) {
+  // 同梱のリストに、自分で足したぶんを混ぜる。
+  // 「100名城のうち1つ足りない、自分で足したい」に応えるため。分母も増える。
+  function itemsOf(col, extra) {
+    const add = (extra && extra[col.id]) || [];
+    if (!add.length) return col.items;
+    const names = new Set(col.items.map((i) => i.name));
+    return col.items.concat(add.filter((i) => !names.has(i.name)).map((i) => {
+      const c = Object.assign({}, i);
+      c.mine = true;                      // 自分で足したものは消せるようにする
+      return c;
+    }));
+  }
+
+  function collectStats(col, visits, hand, extra) {
+    const items = itemsOf(col, extra);
     let n = 0;
-    for (const it of col.items) if (visitedItem(it, visits)) n++;
-    return { done: n, total: col.items.length };
+    for (const it of items) if (visitedItem(it, visits, (hand || {})[col.id])) n++;
+    return { done: n, total: items.length };
+  }
+
+  async function collectMeta() {
+    const [hand, extra] = await Promise.all([
+      Store.getMeta('collectDone'), Store.getMeta('collectExtra'),
+    ]);
+    return { hand: hand || {}, extra: extra || {} };
   }
 
   async function renderCollect() {
     const box = $('#collect-list');
     const mine = $('#collect-custom');
     if (!box) return;
-    const [cols, custom, visits] = await Promise.all([
-      loadCollections(), customCollections(), Store.getAllVisits(),
+    const [cols, custom, visits, meta] = await Promise.all([
+      loadCollections(), customCollections(), Store.getAllVisits(), collectMeta(),
     ]);
     state.customCols = custom;
+    state.collectMeta = meta;
 
     const card = (col) => {
-      const s = collectStats(col, visits);
+      const s = collectStats(col, visits, meta.hand, meta.extra);
       const pct = s.total ? Math.round((s.done / s.total) * 100) : 0;
       const b = document.createElement('button');
       b.type = 'button';
@@ -3046,7 +3072,9 @@
       b.innerHTML =
         '<span class="ccard__mark">' + (col.mark || '📋') + '</span>'
         + '<span class="ccard__body">'
-        + '<b>' + escapeHtml(col.name) + '</b>'
+        + '<b>' + escapeHtml(col.name)
+        + (col.area ? '<i class="ccard__area">' + escapeHtml(col.area) + '</i>' : '')
+        + '</b>'
         + '<span class="ccard__bar"><i style="width:' + pct + '%"></i></span>'
         + '<small>' + s.done + ' / ' + s.total + ' か所（' + pct + '%）</small>'
         + '</span>';
@@ -3054,8 +3082,24 @@
       return b;
     };
 
+    // ★区分ごとの見出しで分ける★
+    // 巡礼は地域ごとに無数にあり、これから増える。ただ並べると探せなくなる。
+    // 地域（関東・四国など）はカードの名前の横に出す。
     box.innerHTML = '';
-    cols.forEach((c) => box.appendChild(card(c)));
+    const groups = [];
+    for (const c of cols) {
+      const g = c.group || 'そのほか';
+      let bucket = groups.find((x) => x.name === g);
+      if (!bucket) { bucket = { name: g, cols: [] }; groups.push(bucket); }
+      bucket.cols.push(c);
+    }
+    for (const g of groups) {
+      const h = document.createElement('p');
+      h.className = 'cgroup';
+      h.textContent = g.name + '（' + g.cols.length + '）';
+      box.appendChild(h);
+      g.cols.forEach((c) => box.appendChild(card(c)));
+    }
     mine.innerHTML = '';
     if (!custom.length) {
       mine.innerHTML = '<p class="muted" style="padding:4px 2px">まだありません。</p>';
@@ -3070,7 +3114,11 @@
     $('#collect-detail').hidden = false;
     $('#cdet-title').textContent = (col.mark || '📋') + ' ' + col.name;
     $('#cdet-note').textContent = col.note || '';
-    $('#cdet-acts').hidden = !!col.builtin;
+    // 「足りない分を自分で足したい」に応えるため、同梱のリストでも追加はできる。
+    // 消せるのは自分のリストだけ（同梱の中身を壊さないため）。
+    $('#cdet-acts').hidden = false;
+    $('#btn-cdet-del').hidden = !!col.builtin;
+    $('#btn-cdet-share').hidden = !!col.builtin;
     $('#cdet-filter').value = '';
     $('#cdet-todo').checked = false;
     await renderCollectItems();
@@ -3086,19 +3134,22 @@
   async function renderCollectItems() {
     const col = state.curCol;
     if (!col) return;
-    const visits = await Store.getAllVisits();
+    const [visits, meta] = await Promise.all([Store.getAllVisits(), collectMeta()]);
+    state.collectMeta = meta;
+    const hand = meta.hand[col.id] || [];
+    const items = itemsOf(col, meta.extra);
     const q = ($('#cdet-filter').value || '').trim().toLowerCase();
     const todoOnly = $('#cdet-todo').checked;
 
     let done = 0;
-    const rows = col.items.map((it) => {
-      const been = visitedItem(it, visits);
+    const rows = items.map((it) => {
+      const been = visitedItem(it, visits, hand);
       if (been) done++;
-      return { it, been };
+      return { it: it, been: been };
     });
-    const pct = col.items.length ? Math.round((done / col.items.length) * 100) : 0;
+    const pct = items.length ? Math.round((done / items.length) * 100) : 0;
     $('#cdet-bar').style.width = pct + '%';
-    $('#cdet-text').textContent = done + ' / ' + col.items.length + ' か所（' + pct + '%）';
+    $('#cdet-text').textContent = done + ' / ' + items.length + ' か所（' + pct + '%）';
 
     const box = $('#cdet-items');
     box.innerHTML = '';
@@ -3111,17 +3162,40 @@
     for (const r of shown) {
       const row = document.createElement('div');
       row.className = 'citem' + (r.been ? ' is-done' : '');
+
+      // ★丸を押すと手で「行った」を付けられる★
+      // 昔に行ったが記録していない分は、自動判定だけでは永久に埋まらない。
+      // 記録から見つかったものは押しても外さない（記録の方が確かなため）。
+      const chk = document.createElement('button');
+      chk.type = 'button';
+      chk.className = 'citem__chk' + (r.been === 'hand' ? ' is-hand' : '');
+      chk.textContent = r.been ? '✓' : '';
+      chk.title = r.been === 'auto' ? '記録があります'
+        : (r.been === 'hand' ? '手で付けました。押すと外します' : '押すと「行った」にします');
+      chk.addEventListener('click', () => toggleHand(col, r.it, r.been));
+      row.appendChild(chk);
+
       const jump = document.createElement('button');
       jump.type = 'button';
       jump.className = 'citem__go';
-      jump.innerHTML = '<span class="citem__chk">' + (r.been ? '✓' : '') + '</span>'
-        + escapeHtml(r.it.name);
+      const no = r.it.no ? '<b class="citem__no">' + r.it.no + '</b>' : '';
+      jump.innerHTML = no + escapeHtml(r.it.name)
+        + (r.it.mine ? '<i class="citem__mine">自分で追加</i>' : '');
       jump.addEventListener('click', () => {
         switchTab('map');
         setTimeout(() => state.map.setView([r.it.lat, r.it.lng], 16), 80);
       });
       row.appendChild(jump);
-      if (!r.been) {
+
+      if (r.it.mine) {
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'citem__del';
+        del.textContent = '×';
+        del.title = 'この項目を消す';
+        del.addEventListener('click', () => removeExtra(col, r.it));
+        row.appendChild(del);
+      } else if (!r.been) {
         const rec = document.createElement('button');
         rec.type = 'button';
         rec.className = 'mapsearch__rec';
@@ -3139,17 +3213,42 @@
     }
   }
 
+  // 手で「行った」を付ける・外す。
+  async function toggleHand(col, item, been) {
+    if (been === 'auto') { toast('記録があるので「行った」になっています'); return; }
+    const meta = await collectMeta();
+    const list = meta.hand[col.id] || [];
+    const i = list.indexOf(item.name);
+    if (i >= 0) list.splice(i, 1);
+    else list.push(item.name);
+    meta.hand[col.id] = list;
+    await Store.setMeta('collectDone', meta.hand);
+    await renderCollectItems();
+    toast(i >= 0 ? '「行った」を外しました' : item.name + ' に「行った」を付けました');
+  }
+
+  async function removeExtra(col, item) {
+    const meta = await collectMeta();
+    const list = (meta.extra[col.id] || []).filter((i) => i.name !== item.name);
+    meta.extra[col.id] = list;
+    await Store.setMeta('collectExtra', meta.extra);
+    await renderCollectItems();
+    toast('消しました');
+  }
+
   // 地図にこのリストを出す。まだ行っていない所が見えるのが目的なので、
   // 行った所は薄く、まだの所をはっきり出す。
   async function showCollectionOnMap() {
     const col = state.curCol;
     if (!col) return;
-    const visits = await Store.getAllVisits();
+    const [visits, meta] = await Promise.all([Store.getAllVisits(), collectMeta()]);
+    const hand = meta.hand[col.id] || [];
+    const items = itemsOf(col, meta.extra);
     state.colLayerName = col.name;
     if (state.colLayer) { state.map.removeLayer(state.colLayer); state.colLayer = null; }
     const g = L.layerGroup();
-    for (const it of col.items) {
-      const been = visitedItem(it, visits);
+    for (const it of items) {
+      const been = visitedItem(it, visits, hand);
       const m = L.circleMarker([it.lat, it.lng], {
         radius: been ? 5 : 8,
         color: been ? '#9aa7b8' : '#c0392b',
@@ -3157,7 +3256,7 @@
         fillOpacity: been ? 0.5 : 0.95,
         weight: 2,
       });
-      m.bindTooltip((been ? '✓ ' : '') + it.name);
+      m.bindTooltip((been ? '✓ ' : '') + (it.no ? it.no + '. ' : '') + it.name);
       m.on('click', () => {
         if (been) { toast(it.name + '：記録があります'); return; }
         recordLandmark(it.name, { tag: col.tag || '' }, it.lat, it.lng);
@@ -3166,7 +3265,7 @@
     }
     state.colLayer = g.addTo(state.map);
     switchTab('map');
-    const b = L.latLngBounds(col.items.map((i) => [i.lat, i.lng]));
+    const b = L.latLngBounds(items.map((i) => [i.lat, i.lng]));
     setTimeout(() => {
       state.map.invalidateSize();
       state.map.fitBounds(b.pad(0.1));
@@ -3193,6 +3292,50 @@
     toast('作りました。「場所を追加」で足していけます');
   }
 
+  // ★自分の記録からリストを作る★
+  // 「行ったお店」「回った城」はもう記録の中にある。それをリストにすれば人に渡せる。
+  // ★記録そのものを渡さない★ 訪問日・写真・メモ・金額は入れない。
+  // 記録を渡すと相手の履歴に自分の訪問が混ざるが、リストなら相手は「まだ行っていない所」
+  // として見られる。このアプリでやりたいのは後者。
+  async function collectionFromTag() {
+    const all = await Store.getAllVisits();
+    const counts = new Map();
+    for (const v of all) {
+      if (!(v.coords && typeof v.coords.lat === 'number')) continue;
+      const k = tagKeyOf(v.tag);
+      counts.set(k, (counts.get(k) || 0) + 1);
+    }
+    const opts = TAGS.filter((t) => counts.get(t.key));
+    if (!opts.length) { toast('位置つきの記録がまだありません'); return; }
+    const lines = opts.map((t, i) => (i + 1) + '. ' + t.mark + ' ' + t.label
+      + '（' + counts.get(t.key) + '件）').join('\n');
+    const a = prompt('どのタグからリストを作りますか？ 番号を入れてください。\n\n' + lines, '1');
+    const n = parseInt(a, 10);
+    if (!(n >= 1 && n <= opts.length)) return;
+    const tag = opts[n - 1];
+
+    // 同じ場所は1つにまとめる（何度も行った店が何度も並ばないように）
+    const picked = all.filter((v) => tagKeyOf(v.tag) === tag.key
+      && v.coords && typeof v.coords.lat === 'number');
+    const items = groupByPlace(picked).map((g) => ({
+      name: (g.name || '').trim() || (g.items[0] && g.items[0].name) || '名前なし',
+      lat: Math.round(g.lat * 1e6) / 1e6,
+      lng: Math.round(g.lng * 1e6) / 1e6,
+    }));
+    if (!items.length) { toast('作れる場所がありませんでした'); return; }
+
+    const nm = prompt('リストの名前', tag.label + 'で行ったところ');
+    if (!nm || !nm.trim()) return;
+    const list = await customCollections();
+    list.push({
+      id: 'c-' + Date.now().toString(36), name: nm.trim(), mark: tag.mark,
+      tag: tag.key, note: '自分の記録（' + tag.label + '）から作ったリスト', items: items,
+    });
+    await saveCustom(list);
+    await renderCollect();
+    toast(items.length + ' か所のリストを作りました');
+  }
+
   async function deleteCustomCollection() {
     const col = state.curCol;
     if (!col || col.builtin) return;
@@ -3207,7 +3350,7 @@
   // 場所検索（手元＋インターネット）で座標ごと選んでもらう。
   async function addToCustomCollection() {
     const col = state.curCol;
-    if (!col || col.builtin) return;
+    if (!col) return;
     const word = prompt('追加する場所の名前（例: 大洗磯前神社）');
     if (!word || !word.trim()) return;
     const text = word.trim();
@@ -3221,11 +3364,27 @@
     if (!hits.length) { toast('見つかりませんでした'); return; }
     const pick = hits.length === 1 ? hits[0] : hits[Math.max(0, chooseIndex(hits))];
     if (!pick) return;
+    const row = { name: pick.name, lat: pick.lat, lng: pick.lng };
+
+    if (col.builtin) {
+      // 同梱のリストは書き換えず、足したぶんだけ別に持つ。
+      // こうしておくと、あとで同梱データを直しても自分の追加が消えない。
+      const meta = await collectMeta();
+      const list = meta.extra[col.id] || [];
+      if (list.some((i) => i.name === row.name)) { toast('もう入っています'); return; }
+      list.push(row);
+      meta.extra[col.id] = list;
+      await Store.setMeta('collectExtra', meta.extra);
+      await renderCollectItems();
+      toast(pick.name + ' を追加しました（自分で追加した分）');
+      return;
+    }
+
     const list = await customCollections();
     const target = list.find((c) => c.id === col.id);
     if (!target) return;
-    if (target.items.some((i) => i.name === pick.name)) { toast('もう入っています'); return; }
-    target.items.push({ name: pick.name, lat: pick.lat, lng: pick.lng });
+    if (target.items.some((i) => i.name === row.name)) { toast('もう入っています'); return; }
+    target.items.push(row);
     await saveCustom(list);
     state.curCol = target;
     await renderCollectItems();
@@ -3240,6 +3399,83 @@
     return isFinite(n) && n >= 1 && n <= hits.length ? n - 1 : -1;
   }
 
+  // ★自作リストを人に渡せるようにする★
+  // 巡礼や霊場は地域ごとに無数にあり、廃れたものや期間限定のものもある。
+  // 全部を同梱するのは無理なので、1人が作ったものを他の人が使える形にしておく。
+  // 中身は場所の名前と座標だけ。自分の記録（訪問日・写真・メモ）は入らない。
+  function collectionFile(col) {
+    const data = {
+      app: 'meguri-log',
+      kind: 'collection',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      collection: {
+        name: col.name,
+        mark: col.mark || '📋',
+        tag: col.tag || '',
+        note: col.note || '',
+        items: (col.items || []).map((i) => {
+          const o = { name: i.name, lat: i.lat, lng: i.lng };
+          if (i.no) o.no = i.no;
+          return o;
+        }),
+      },
+    };
+    const name = 'meguri-list-' + String(col.name).replace(/[^\p{L}\p{N}ー・]/gu, '')
+      + '-' + todayLocal() + '.json';
+    return { data: data, name: name, blob: new Blob([JSON.stringify(data)], { type: 'application/json' }) };
+  }
+
+  function shareCollection() {
+    const col = state.curCol;
+    if (!col || col.builtin) return;
+    if (!col.items || !col.items.length) { toast('まだ場所が入っていません'); return; }
+    const f = collectionFile(col);
+    const st = state.shareType;
+    // 共有は押された直後にしか通らないので、ここで await を挟まない
+    if (st && navigator.share) {
+      const file = new File([f.blob], f.name.replace(/\.json$/, '.' + st.ext), { type: st.type });
+      navigator.share({ files: [file], title: 'めぐログのリスト：' + col.name })
+        .then(() => toast('送信先を選んでください'))
+        .catch((err) => {
+          if (err && err.name === 'AbortError') return;
+          saveFile(new File([f.blob], f.name, { type: 'application/json' }));
+          toast('共有できなかったので、ファイルとして保存しました');
+        });
+      return;
+    }
+    saveFile(new File([f.blob], f.name, { type: 'application/json' }));
+    toast('ファイルに保存しました');
+  }
+
+  async function importCollectionFile(file) {
+    let d = null;
+    try { d = JSON.parse(await file.text()); } catch (e) { d = null; }
+    const c = d && d.collection;
+    if (!d || d.app !== 'meguri-log' || d.kind !== 'collection' || !c || !Array.isArray(c.items)) {
+      toast('このファイルは めぐログ のリストではありません');
+      return;
+    }
+    // 座標が無いものは地図に出せないので入れない
+    const items = c.items.filter((i) => typeof i.lat === 'number' && typeof i.lng === 'number' && i.name);
+    if (!items.length) { toast('中身がありませんでした'); return; }
+    const list = await customCollections();
+    const dup = list.find((x) => x.name === c.name);
+    const ok = confirm('「' + c.name + '」を読み込みます。\n' + items.length + ' か所'
+      + (dup ? '\n\n同じ名前のリストが既にあります。別のリストとして足します。' : '')
+      + '\n\n読み込みますか？');
+    if (!ok) return;
+    list.push({
+      id: 'c-' + Date.now().toString(36),
+      name: dup ? c.name + '（読み込み）' : c.name,
+      mark: c.mark || '📋', tag: c.tag || '', note: c.note || 'もらったリスト',
+      items: items,
+    });
+    await saveCustom(list);
+    await renderCollect();
+    toast('読み込みました（' + items.length + ' か所）');
+  }
+
   function initCollect() {
     const back = $('#btn-collect-back');
     if (!back) return;
@@ -3248,6 +3484,14 @@
     $('#btn-collect-new').addEventListener('click', newCustomCollection);
     $('#btn-cdet-add').addEventListener('click', addToCustomCollection);
     $('#btn-cdet-del').addEventListener('click', deleteCustomCollection);
+    $('#btn-cdet-share').addEventListener('click', shareCollection);
+    $('#btn-collect-fromtag').addEventListener('click', collectionFromTag);
+    $('#btn-collect-import').addEventListener('click', () => $('#collect-file').click());
+    $('#collect-file').addEventListener('change', async (e) => {
+      const f = e.target.files[0];
+      if (f) await importCollectionFile(f);
+      e.target.value = '';
+    });
     let t = null;
     $('#cdet-filter').addEventListener('input', () => {
       clearTimeout(t); t = setTimeout(renderCollectItems, 180);

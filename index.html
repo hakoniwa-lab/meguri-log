@@ -129,7 +129,15 @@
         <h3>自分のリスト</h3>
         <p class="muted">一覧に無いもの（アニメの聖地、地元の祭りなど）は自分で作れます。</p>
         <div id="collect-custom" class="list"></div>
-        <button id="btn-collect-new" class="btn btn--sub btn--slim">リストを作る</button>
+        <div class="btns">
+          <button id="btn-collect-new" class="btn btn--sub btn--slim">リストを作る</button>
+          <button id="btn-collect-fromtag" class="btn btn--sub btn--slim">記録から作る</button>
+          <button id="btn-collect-import" class="btn btn--sub btn--slim">リストを読み込む</button>
+          <input type="file" id="collect-file" accept="application/json,text/plain,.json,.txt" hidden>
+        </div>
+        <p class="muted">「記録から作る」は、選んだタグの記録からリストを作ります（例: 食事タグ →
+          行ったお店のリスト）。<b>訪問日・写真・メモは入りません</b>ので、そのまま人に渡せます。<br>
+          人からもらったリストは「読み込む」で足せます。</p>
       </div>
     </div>
 
@@ -149,6 +157,7 @@
       <div id="cdet-items" class="list"></div>
       <div class="cdet__acts" id="cdet-acts" hidden>
         <button id="btn-cdet-add" class="btn btn--sub btn--slim">場所を追加</button>
+        <button id="btn-cdet-share" class="btn btn--sub btn--slim">このリストを渡す</button>
         <button id="btn-cdet-del" class="btn btn--danger btn--slim">このリストを削除</button>
       </div>
     </div>
