@@ -524,7 +524,9 @@ a{color:var(--navy)}
 .visit__time{font-weight:700; color:var(--muted); font-size:12.5px}
 
 /* ---- 地図の場所検索 ---- */
-.mapsearch{position:relative; margin:0 0 8px}
+/* z-index は Leaflet のコントロール(1000)より上。指定しないと、候補の上に
+   地図の +/- ボタンが描かれて読めなくなる（実際にそうなっていた）。 */
+.mapsearch{position:relative; z-index:1200; margin:0 0 8px}
 .mapsearch input{
   width:100%; padding:9px 34px 9px 12px; font-size:14px;
   border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--ink);
@@ -538,7 +540,7 @@ a{color:var(--navy)}
 .mapsearch__hits{
   position:absolute; left:0; right:0; top:calc(100% + 4px); z-index:600;
   background:#fff; border:1px solid var(--line); border-radius:8px;
-  box-shadow:0 6px 20px rgba(20,30,50,.14); max-height:280px; overflow:auto;
+  box-shadow:0 6px 20px rgba(20,30,50,.14); max-height:330px; overflow:auto;
 }
 .mapsearch__hit{
   display:block; width:100%; text-align:left; padding:9px 12px; border:0;
@@ -549,6 +551,39 @@ a{color:var(--navy)}
 .mapsearch__hit:hover, .mapsearch__hit:focus{background:var(--bg)}
 .mapsearch__hit small{display:block; color:var(--muted); font-size:11.5px; margin-top:1px}
 .mapsearch__none{padding:10px 12px; font-size:12.5px; color:var(--muted)}
+
+/* 「インターネットでも探す」の行。押されたときだけ通信するので、
+   通信することが行を見ただけで分かるようにしておく。 */
+.mapsearch__net{
+  /* 一番下に固定する。候補が長いとスクロールしないと出てこず、
+     「探す手段がある」ことに気づけない。 */
+  position:sticky; bottom:0;
+  display:block; width:100%; text-align:left; padding:10px 12px;
+  border:0; border-top:1px solid var(--line); background:var(--bg);
+  font:inherit; font-size:13px; font-weight:700; color:var(--navy); cursor:pointer;
+}
+.mapsearch__net:disabled{color:var(--muted); font-weight:400; cursor:default}
+.mapsearch__net small{display:block; font-size:11px; font-weight:400; color:var(--muted); margin-top:2px}
+.mapsearch__head{
+  padding:7px 12px; font-size:11.5px; font-weight:700; color:var(--muted);
+  background:var(--bg); border-top:1px solid var(--line); border-bottom:1px solid var(--line);
+}
+/* 探した結果には「記録」を並べる。名前を打ち直さずにそのまま記録できるように。 */
+.mapsearch__row{display:flex; align-items:stretch; border-bottom:1px solid var(--line)}
+.mapsearch__row:last-child{border-bottom:0}
+.mapsearch__row .mapsearch__hit{flex:1 1 auto; min-width:0; width:auto; border-bottom:0}
+.mapsearch__rec{
+  flex:0 0 auto; align-self:center; margin:0 8px;
+  padding:6px 12px; border:1.5px solid var(--navy); border-radius:99px;
+  background:#fff; color:var(--navy); font:inherit; font-size:12px; font-weight:700; cursor:pointer;
+}
+.mapsearch__rec:active{background:var(--bg)}
+/* 探した場所に「もう行った」を出す。探し直したときに二重に記録しないため。 */
+.visit__when{margin:2px 0 0; font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums}
+.mapsearch__been{
+  display:inline-block; margin-left:6px; padding:1px 7px; border-radius:99px;
+  background:var(--amber); color:#fff; font-size:10.5px; font-weight:700; vertical-align:middle;
+}
 
 /* ---- 「この範囲で探す」 ---- */
 .searcharea{

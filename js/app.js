@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v32';
+  const APP_VERSION = 'v33';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -31,12 +31,21 @@
 
   // 訪問の目的タグ。「何で行ったか」を一目で分かるようにするためのもの。
   // 項目を増やすと記録が億劫になるので、1つだけ・任意入力にしている。
+  // ★key は保存済みの記録が参照している。key は変えない（label だけなら安全に変えられる）★
+  // 並び順は表示の順。既存のタグは位置を動かさず、新しいものを近い仲間の隣に足している
+  // （並びが変わると、いつも押している場所が変わって押し間違える）。
+  // ⚠ `mtn` `onsen` は MARK_KINDS にも同じ key がある。一括置換をすると
+  //    片方だけ直すつもりがもう片方に入り、気づきにくい。
   const TAGS = [
     { key: '',      mark: '📍', label: '未設定' },
     { key: 'work',  mark: '💼', label: '仕事' },
     { key: 'play',  mark: '🎡', label: '遊び' },
+    { key: 'trip',  mark: '🧳', label: '旅行' },
+    { key: 'stay',  mark: '🏨', label: '宿・ホテル' },
     { key: 'castle',mark: '🏯', label: '城' },
     { key: 'statn', mark: '🚉', label: '駅' },
+    { key: 'air',   mark: '✈️', label: '空港' },
+    { key: 'port',  mark: '⛴️', label: '港・フェリー' },
     { key: 'shrine',mark: '⛩️', label: '神社' },
     { key: 'temple',mark: '📿', label: 'お寺' },
     { key: 'shop',  mark: '🛍️', label: '買い物' },
@@ -44,9 +53,12 @@
     { key: 'food',  mark: '🍽️', label: '食事' },
     { key: 'michi', mark: '🛣️', label: '道の駅' },
     { key: 'sapa',  mark: '🅿️', label: 'SA・PA' },
+    { key: 'park',  mark: '🚗', label: '駐車場' },
+    { key: 'toilet',mark: '🚻', label: 'トイレ' },
     { key: 'mtn',   mark: '⛰️', label: '山・登山' },
-    { key: 'onsen', mark: '♨️', label: '温泉' },
-    { key: 'home',  mark: '🏠', label: '帰省' },
+    { key: 'dam',   mark: '🌊', label: 'ダム' },
+    { key: 'onsen', mark: '♨️', label: '温泉・銭湯' },
+    { key: 'home',  mark: '🏠', label: '実家・知人宅' },
     { key: 'other', mark: '✳️', label: 'その他' },
   ];
   const tagOf = (k) => TAGS.find((t) => t.key === (k || '')) || TAGS[0];
@@ -523,7 +535,7 @@
       qs: ['nwr["amenity"="place_of_worship"]'] },
     { key: 'mtn',    def: false, mark: '⛰️', label: '山',   tag: 'mtn',
       qs: ['nwr["natural"~"^(peak|volcano)$"]'] },
-    { key: 'onsen',  def: false, mark: '♨️', label: '温泉', tag: 'onsen',
+    { key: 'onsen',  def: false, mark: '♨️', label: '温泉・銭湯', tag: 'onsen',
       qs: ['nwr["natural"="hot_spring"]', 'nwr["amenity"="public_bath"]'] },
     { key: 'dam', def: false,    mark: '🌊', label: 'ダム', tag: 'dam',
       qs: ['nwr["waterway"="dam"]'] },
@@ -584,56 +596,250 @@
     if (!q) return;
     let timer = null;
 
+    let lastVisits = [];          // 探した結果に「もう行った」を出すための控え
+    // ★探している途中で打ち直されたら、古い結果は捨てる★
+    // 記録の読み出しもインターネットの検索も待ち時間があるので、
+    // 番号を控えておかないと「松本城」の結果が「金沢城」の一覧に足される。
+    let seq = 0;
+
     const close = () => { hits.hidden = true; hits.innerHTML = ''; };
     const clear = () => { q.value = ''; x.hidden = true; close(); };
     x.addEventListener('click', clear);
+
+    function headRow(text) {
+      const d = document.createElement('div');
+      d.className = 'mapsearch__head';
+      d.textContent = text;
+      return d;
+    }
 
     q.addEventListener('input', () => {
       x.hidden = !q.value;
       clearTimeout(timer);
       timer = setTimeout(() => runMapSearch(q.value.trim()), 220);
     });
-    q.addEventListener('keydown', (e) => { if (e.key === 'Escape') clear(); });
+    q.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { clear(); return; }
+      // Enter は「インターネットでも探す」の合図。1文字ごとには投げない
+      if (e.key === 'Enter') { e.preventDefault(); runOnline(q.value.trim()); }
+    });
     // 地図をさわったら候補を閉じる（指で隠れて邪魔になるため）
     document.addEventListener('click', (e) => {
       if (!e.target.closest('.mapsearch')) close();
     });
 
+    // 手元にあるものだけを探す。ここでは通信しない。
     async function runMapSearch(text) {
+      const mine0 = ++seq;
       if (!text) { close(); return; }
       // 市区町村まで探せたほうが役に立つので、未読なら読みに行く
       if (!state.geo.city && !state.loadingCity) await ensureLevelData('city');
       const visits = await Store.getAllVisits();
-      const list = searchPlaces(text, 8, visits);
+      if (mine0 !== seq) return;                 // 待っている間に打ち直された
+      lastVisits = visits;
+      const list = searchPlaces(text, 6, visits);
       hits.innerHTML = '';
+      // ★「行ったところ」と「まだ行っていない場所」を分けて見せる★
+      // 探し方は2通りある。前に行ったあそこを出したいのか、
+      // これから行く場所を探しているのか。混ぜて並べるとどちらも遅くなる。
+      const mine = list.filter((it) => it.src === 'visit');
+      const geo = list.filter((it) => it.src !== 'visit');
+      if (mine.length) {
+        hits.appendChild(headRow('行ったところ（自分の記録）'));
+        mine.forEach((it) => hits.appendChild(rowFor(it)));
+      }
+      if (geo.length) {
+        hits.appendChild(headRow('地名（都道府県・市区町村）'));
+        geo.forEach((it) => hits.appendChild(rowFor(it)));
+      }
       if (!list.length) {
         const n = document.createElement('div');
         n.className = 'mapsearch__none';
-        n.textContent = '見つかりませんでした';
+        n.textContent = '記録と地名の中には見つかりませんでした。';
         hits.appendChild(n);
-        hits.hidden = false;
-        return;
       }
-      for (const it of list) {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'mapsearch__hit';
-        b.innerHTML = '';
-        b.appendChild(document.createTextNode(it.name));
-        const sm = document.createElement('small');
-        sm.textContent = it.sub;
-        b.appendChild(sm);
-        b.addEventListener('click', () => {
-          close();
-          q.blur();
-          state.map.setView([it.lat, it.lng], it.zoom);
-          // 動かすと「この範囲で探す」が出るので、飛んだ先ですぐ探せる
-          if (state.marksOn) showSearchArea(true);
-        });
-        hits.appendChild(b);
-      }
+      hits.appendChild(onlineRow(text));
       hits.hidden = false;
     }
+
+    // 「地図から探す」の行。押されたときだけ通信する。
+    function onlineRow(text) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'mapsearch__net';
+      b.appendChild(document.createTextNode('\ud83c\udf10 「' + text + '」を地図から探す'));
+      const sm = document.createElement('small');
+      sm.textContent = 'お寺・城・神社・お店など。インターネットに接続します';
+      b.appendChild(sm);
+      b.addEventListener('click', () => runOnline(text, b));
+      return b;
+    }
+
+    async function runOnline(text, btn) {
+      if (!text) return;
+      const mine0 = seq;
+      const b = btn || hits.querySelector('.mapsearch__net');
+      if (b) { b.disabled = true; b.textContent = '探しています…'; }
+      hits.hidden = false;
+      let list = [];
+      let err = null;
+      try { list = await searchOnline(text); } catch (e) { err = e; }
+      if (mine0 !== seq) return;                 // 探している間に打ち直された
+      if (b) b.remove();
+      hits.appendChild(headRow(
+        err ? '地図から探せませんでした（電波の状態を確かめてください）'
+          : (list.length ? '地図から探した場所' : '地図にも見つかりませんでした')));
+      list.forEach((it) => {
+        it.been = beenThere(lastVisits, it.name, it.lat, it.lng);
+        hits.appendChild(rowFor(it, true));
+      });
+      hits.hidden = false;
+    }
+
+    // 候補の1行。地図から探した結果には「記録」も付ける
+    // （探した名前をもう一度打ち直させないため）。
+    function rowFor(it, net) {
+      const jump = document.createElement('button');
+      jump.type = 'button';
+      jump.className = 'mapsearch__hit';
+      jump.appendChild(document.createTextNode(it.name));
+      if (it.been) {
+        const bad = document.createElement('b');
+        bad.className = 'mapsearch__been';
+        bad.textContent = it.been;
+        jump.appendChild(bad);
+      }
+      const sm = document.createElement('small');
+      sm.textContent = it.sub;
+      jump.appendChild(sm);
+      jump.addEventListener('click', () => {
+        close();
+        q.blur();
+        state.map.setView([it.lat, it.lng], it.zoom);
+        // 動かすと「この範囲で探す」が出るので、飛んだ先ですぐ探せる
+        if (state.marksOn) showSearchArea(true);
+      });
+      if (!net) return jump;
+
+      const row = document.createElement('div');
+      row.className = 'mapsearch__row';
+      row.appendChild(jump);
+      const rec = document.createElement('button');
+      rec.type = 'button';
+      rec.className = 'mapsearch__rec';
+      rec.textContent = '記録';
+      rec.addEventListener('click', () => {
+        close();
+        q.blur();
+        state.map.setView([it.lat, it.lng], it.zoom);
+        recordLandmark(it.name, { tag: it.tag || '' }, it.lat, it.lng);
+      });
+      row.appendChild(rec);
+      return row;
+    }
+  }
+
+  // ★地図から名前で探す（通信あり）★
+  // 押されたときだけ投げる。1文字ごとに投げてはいけない——提供元(Nominatim)が
+  // 「入力補完には使わないこと」と明記している。ここを守らないと、同じOSM系の
+  // ランドマーク取得(Overpass)まで巻き添えで使えなくなる恐れがある。
+  const NOMINATIM = 'https://nominatim.openstreetmap.org/search';
+  let lastOnlineAt = 0;
+
+  async function searchOnline(text) {
+    const wait = 1100 - (Date.now() - lastOnlineAt);   // 1秒に1回まで
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    lastOnlineAt = Date.now();
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 12000);
+    try {
+      const url = NOMINATIM + '?q=' + encodeURIComponent(text)
+        + '&countrycodes=jp&format=jsonv2&limit=8&accept-language=ja';
+      const r = await fetch(url, { signal: ctrl.signal, headers: { Accept: 'application/json' } });
+      if (!r.ok) throw new Error('search failed');
+      const j = await r.json();
+      const out = [];
+      for (const it of (Array.isArray(j) ? j : [])) {
+        if (isJunk(it.category, it.type)) continue;   // 信号機・バス停など
+        const name = (it.name || '').trim() || String(it.display_name || '').split(',')[0].trim();
+        const lat = parseFloat(it.lat), lng = parseFloat(it.lon);
+        if (!name || !isFinite(lat) || !isFinite(lng)) continue;
+        // 同じ名前が同じ場所に何件も返る（本体・駐輪場・交差点など）。
+        // 上位のものが一番もっともらしいので、先に出た方を残す。
+        if (out.some((o) => o.name === name && distMeters(o.lat, o.lng, lat, lng) <= 300)) continue;
+        const tag = netTagOf(it.category, it.type, name);
+        const t2 = tagOf(tag);
+        out.push({
+          name: name,
+          sub: t2.mark + ' ' + t2.label + (addrOf(it.display_name) ? ' ・ ' + addrOf(it.display_name) : ''),
+          tag: tag,
+          lat: lat, lng: lng, zoom: 17,
+        });
+      }
+      return out;
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  // 行き先にならないものを落とす。
+  // 「松本城」で探すと、同じ名前の信号機やレンタルサイクルまで返ってくる。
+  const NET_SKIP_CAT = /^(highway|barrier|traffic_calming|power|boundary|landuse)$/;
+  const NET_SKIP_TYPE = /^(traffic_signals|bus_stop|crossing|stop|give_way|turning_circle|street_lamp|bench|waste_basket|vending_machine|bicycle_rental|bicycle_parking|motorcycle_parking|post_box|telephone|fire_hydrant|survey_point|milestone|tree|pitch|track)$/;
+  function isJunk(cat, type) {
+    return NET_SKIP_CAT.test(cat || '') || NET_SKIP_TYPE.test(type || '');
+  }
+
+  // 住所は長いので、都道府県と市区町村だけ見せる。
+  // 後ろから探す（前からだと「葭町」のような小字を市区町村と取り違える）。
+  function addrOf(displayName) {
+    const rev = String(displayName || '').split(',').map((v) => v.trim()).filter(Boolean).reverse();
+    const pref = rev.find((v) => /[都道府県]$/.test(v)) || '';
+    const city = rev.find((v) => v !== pref && /[市区町村]$/.test(v)) || '';
+    return [pref, city].filter(Boolean).join(' ');
+  }
+
+  // 探した場所にもう行っているか。
+  // 名前が一致すれば確かだが、GPSはずれるし、大きな境内のどこで
+  // 記録したかにもよるので、距離だけのときは言い切らない。
+  function beenThere(visits, name, lat, lng) {
+    const nm = (name || '').trim();
+    let near = false;
+    for (const v of (visits || [])) {
+      const vn = (v.place && v.place.name || '').trim();
+      if (nm && vn && vn === nm) return '行った';
+      if (v.coords && distMeters(v.coords.lat, v.coords.lng, lat, lng) <= 120) near = true;
+    }
+    return near ? '近くに記録' : '';
+  }
+
+  // 検索結果の種類を、こちらのタグに寄せる。
+  // ランドマークと同じ見分け方(kindOf)を使い回し、そこで決まらないものだけ足す。
+  // 決まらなければ未設定のまま出す（違うタグが付くより、空のほうが直しやすい）。
+  function netTagOf(cat, type, name) {
+    const k = kindOf({ [cat]: type, name: name });
+    if (k) return k.tag;
+    if (/^(hotel|motel|hostel|guest_house|apartment|chalet)$/.test(type)) return 'stay';
+    if (/^(restaurant|cafe|fast_food|food_court|bar|pub)$/.test(type)) return 'food';
+    if (type === 'convenience') return 'conv';
+    if (type === 'parking') return 'park';
+    if (type === 'toilets') return 'toilet';
+    if (/^(aerodrome|airport|terminal)$/.test(type)) return 'air';
+    if (/^(ferry_terminal|harbour|port|marina)$/.test(type)) return 'port';
+    // ★名前からの見当は、確かな種類の後・大まかな種類の前に置く★
+    // OSM では松本城が museum 、兵庫県の城が attraction などばらつきがある。
+    // 先に大まかな種類で判定すると、城が全部「遊び」になる。
+    if (/(城|城跡|城址)$/.test(name)) return 'castle';
+    if (/駅$/.test(name)) return 'statn';
+    if (/(空港|飛行場)$/.test(name)) return 'air';
+    if (/(港|フェリーターミナル)$/.test(name)) return 'port';
+    if (/(神社|神宮|大社|八幡宮|東照宮)$/.test(name)) return 'shrine';
+    if (/(寺|院|大師|観音)$/.test(name)) return 'temple';
+    if (/(温泉|の湯|銀湯)$/.test(name)) return 'onsen';
+    if (/ダム$/.test(name)) return 'dam';
+    if (/^(supermarket|department_store|mall|shop)$/.test(type)) return 'shop';
+    if (/^(attraction|theme_park|zoo|aquarium|museum|park|garden)$/.test(type)) return 'play';
+    return '';
   }
 
   // 検索の索引。GeoJSONは件数が多いので一度だけ作って使い回す。
@@ -646,6 +852,7 @@
         const c = centerOfFeature(f);
         if (!c) continue;
         idx.push({
+          src: 'geo',
           name: f.properties.name,
           sub: lv === 'pref' ? '都道府県' : '市区町村',
           lat: c[0], lng: c[1], zoom: lv === 'pref' ? 9 : 12,
@@ -684,8 +891,10 @@
       if (seen.has(label)) continue;
       seen.add(label);
       out.push({
+        src: 'visit',
         name: label,
-        sub: '記録' + (nm && v.name ? ' ・ ' + v.name : ''),
+        sub: [tagOf(v.tag).mark + ' ' + tagOf(v.tag).label, v.name, v.visitedAt]
+          .filter(Boolean).join(' ・ '),
         lat: v.coords.lat, lng: v.coords.lng, zoom: 16,
       });
       if (out.length >= limit) return out;
@@ -1440,10 +1649,17 @@
     for (const v of visits) {
       const row = document.createElement('div');
       row.className = 'visit';
+      // ★見出しは「場所の名前」を先に出す★
+      // 1つの市区町村に何件も記録があると、日付だけでは何の記録か分からない
+      // （一覧が地名で埋まって、どれがどれだか見分けられなかった）。
+      const nm = (v.place && v.place.name || '').trim();
+      const when = (v.visitedAt || '') + (v.visitedTime ? ' ' + v.visitedTime : '');
       const head = document.createElement('div');
       head.className = 'visit__head';
-      head.innerHTML = `<b>${tagOf(v.tag).mark} ${escapeHtml(v.visitedAt || '')}` +
-        (v.visitedTime ? ` <span class="visit__time">${escapeHtml(v.visitedTime)}</span>` : '') + '</b>';
+      head.innerHTML = '<b>' + tagOf(v.tag).mark + ' '
+        + escapeHtml(nm || v.visitedAt || '')
+        + (!nm && v.visitedTime ? ' <span class="visit__time">' + escapeHtml(v.visitedTime) + '</span>' : '')
+        + '</b>';
       const del = document.createElement('button');
       del.className = 'linkbtn';
       del.textContent = '削除';
@@ -1461,6 +1677,14 @@
       head.appendChild(edit);
       head.appendChild(del);
       row.appendChild(head);
+
+      // 名前を見出しにしたときだけ、日時を下の行に出す（見出しが日付なら重複する）
+      if (nm && when) {
+        const w = document.createElement('p');
+        w.className = 'visit__when';
+        w.textContent = when;
+        row.appendChild(w);
+      }
 
       if (v.address && v.address.lv01Nm) {
         const a = document.createElement('p');
