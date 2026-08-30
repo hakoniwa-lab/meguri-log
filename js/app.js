@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v35';
+  const APP_VERSION = 'v36';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -133,6 +133,10 @@
     pickTimer: null,
     pickSeq: 0,
     hiddenTags: new Set(),   // 記録画面に出さないタグ（設定で選ぶ）
+    collections: null,       // 同梱の集めるリスト（初回に読む）
+    customCols: [],          // 自分で作ったリスト
+    curCol: null,            // いま開いているリスト
+    colLayer: null,          // 地図に出しているリストのレイヤー
     lines: null,        // 移動の線のレイヤー
     linesOn: true,
     lineDay: null,      // 表示する日（nullは全部）。既定は最新の日
@@ -196,6 +200,7 @@
     initSheet();
     initHistory();
     initSettings();
+    initCollect();
     renderList();
     renderProgress();
     initServiceWorker();
@@ -2903,6 +2908,8 @@
     pushBackGuard();
     window.addEventListener('popstate', () => {
       if (state.layersOpen) { openLayers(false); pushBackGuard(); return; }
+      const cdet = $('#collect-detail');
+      if (cdet && !cdet.hidden) { closeCollection(); pushBackGuard(); return; }
       const sheet = $('#sheet');
       if (sheet && sheet.classList.contains('is-open')) {
         closeSheet(); pushBackGuard(); return;
@@ -2930,6 +2937,7 @@
     if (name === 'map' && state.map) setTimeout(() => { fitMapHeight(); state.map.invalidateSize(); }, 50);
     if (name !== 'map') openLayers(false);
     if (name === 'history') renderHistory(true);
+    if (name === 'collect') { if (state.curCol) renderCollectItems(); else renderCollect(); }
     // 記録したあとに設定を開いたとき、バックアップの状況が古いままにならないように
     if (name === 'settings') {
       ensurePersistOnce().then(() => { renderPersistInfo(); renderDeviceInfo(); });
@@ -2950,6 +2958,303 @@
     if (fi) fi.addEventListener('input', onFilter);
     const ot = $('#only-todo');
     if (ot) ot.addEventListener('change', renderList);
+  }
+
+  // ---------------------------------------------------------------
+  // 集めるリスト（コレクション）
+  // ---------------------------------------------------------------
+  // ★タグとは別の軸★
+  // 姫路城は「城」であり同時に「世界遺産」。タグは1つしか選べないので、
+  // 集めるリストをタグに混ぜると必ずどちらかを捨てることになる。
+  //
+  // 同梱のリストは data/collections/*.json（ビルド時に Wikidata / ウィキペディアから
+  // 作ったもの）。★利用者の端末から一括で取りに行かない★
+  // 自分で作ったリストは meta に入れる（件数が小さいので専用の入れ物は作らない）。
+  const BUILTIN_COLLECTIONS = [
+    { id: 'whs',        file: './data/collections/whs.json' },
+    { id: 'castle100',  file: './data/collections/castle100.json' },
+    { id: 'castle100b', file: './data/collections/castle100b.json' },
+    { id: 'shikoku88',  file: './data/collections/shikoku88.json' },
+    { id: 'saikoku33',  file: './data/collections/saikoku33.json' },
+    { id: 'bando33',    file: './data/collections/bando33.json' },
+    { id: 'meisui100',  file: './data/collections/meisui100.json' },
+    { id: 'taki100',    file: './data/collections/taki100.json' },
+  ];
+
+  // 「もう行った」と見なす距離。城や霊場は敷地が広く、入口で記録することも
+  // 門の中で記録することもあるので、ピンの統合(50m)より広く取る。
+  const COLLECT_NEAR = 400;
+
+  async function loadCollections() {
+    if (state.collections) return state.collections;
+    const out = [];
+    for (const b of BUILTIN_COLLECTIONS) {
+      try {
+        const d = await fetch(b.file).then((r) => r.json());
+        d.builtin = true;
+        out.push(d);
+      } catch (e) { /* 1つ読めなくても残りは出す */ }
+    }
+    state.collections = out;
+    return out;
+  }
+
+  async function customCollections() {
+    return (await Store.getMeta('collections')) || [];
+  }
+
+  async function saveCustom(list) {
+    await Store.setMeta('collections', list);
+  }
+
+  // その項目に行ったか。名前が一致するか、近くに記録があれば「行った」。
+  // 名前は完全一致だけだと拾えない（「姫路城」と「国宝 姫路城」）ので、
+  // どちらかがどちらかを含んでいれば同じものとして扱う。
+  function visitedItem(item, visits) {
+    const nm = (item.name || '').trim();
+    for (const v of visits) {
+      const vn = (v.place && v.place.name || '').trim();
+      if (nm && vn && (vn === nm || (nm.length >= 3 && vn.indexOf(nm) >= 0)
+          || (vn.length >= 3 && nm.indexOf(vn) >= 0))) return true;
+      if (v.coords && typeof v.coords.lat === 'number'
+          && distMeters(v.coords.lat, v.coords.lng, item.lat, item.lng) <= COLLECT_NEAR) return true;
+    }
+    return false;
+  }
+
+  function collectStats(col, visits) {
+    let n = 0;
+    for (const it of col.items) if (visitedItem(it, visits)) n++;
+    return { done: n, total: col.items.length };
+  }
+
+  async function renderCollect() {
+    const box = $('#collect-list');
+    const mine = $('#collect-custom');
+    if (!box) return;
+    const [cols, custom, visits] = await Promise.all([
+      loadCollections(), customCollections(), Store.getAllVisits(),
+    ]);
+    state.customCols = custom;
+
+    const card = (col) => {
+      const s = collectStats(col, visits);
+      const pct = s.total ? Math.round((s.done / s.total) * 100) : 0;
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'ccard' + (s.done ? ' is-started' : '');
+      b.innerHTML =
+        '<span class="ccard__mark">' + (col.mark || '📋') + '</span>'
+        + '<span class="ccard__body">'
+        + '<b>' + escapeHtml(col.name) + '</b>'
+        + '<span class="ccard__bar"><i style="width:' + pct + '%"></i></span>'
+        + '<small>' + s.done + ' / ' + s.total + ' か所（' + pct + '%）</small>'
+        + '</span>';
+      b.addEventListener('click', () => openCollection(col));
+      return b;
+    };
+
+    box.innerHTML = '';
+    cols.forEach((c) => box.appendChild(card(c)));
+    mine.innerHTML = '';
+    if (!custom.length) {
+      mine.innerHTML = '<p class="muted" style="padding:4px 2px">まだありません。</p>';
+    } else {
+      custom.forEach((c) => mine.appendChild(card(c)));
+    }
+  }
+
+  async function openCollection(col) {
+    state.curCol = col;
+    $('#collect-home').hidden = true;
+    $('#collect-detail').hidden = false;
+    $('#cdet-title').textContent = (col.mark || '📋') + ' ' + col.name;
+    $('#cdet-note').textContent = col.note || '';
+    $('#cdet-acts').hidden = !!col.builtin;
+    $('#cdet-filter').value = '';
+    $('#cdet-todo').checked = false;
+    await renderCollectItems();
+  }
+
+  function closeCollection() {
+    state.curCol = null;
+    $('#collect-detail').hidden = true;
+    $('#collect-home').hidden = false;
+    renderCollect();
+  }
+
+  async function renderCollectItems() {
+    const col = state.curCol;
+    if (!col) return;
+    const visits = await Store.getAllVisits();
+    const q = ($('#cdet-filter').value || '').trim().toLowerCase();
+    const todoOnly = $('#cdet-todo').checked;
+
+    let done = 0;
+    const rows = col.items.map((it) => {
+      const been = visitedItem(it, visits);
+      if (been) done++;
+      return { it, been };
+    });
+    const pct = col.items.length ? Math.round((done / col.items.length) * 100) : 0;
+    $('#cdet-bar').style.width = pct + '%';
+    $('#cdet-text').textContent = done + ' / ' + col.items.length + ' か所（' + pct + '%）';
+
+    const box = $('#cdet-items');
+    box.innerHTML = '';
+    const shown = rows.filter((r) =>
+      (!todoOnly || !r.been) && (!q || r.it.name.toLowerCase().indexOf(q) >= 0));
+    if (!shown.length) {
+      box.innerHTML = '<p class="muted" style="padding:12px">該当がありません。</p>';
+      return;
+    }
+    for (const r of shown) {
+      const row = document.createElement('div');
+      row.className = 'citem' + (r.been ? ' is-done' : '');
+      const jump = document.createElement('button');
+      jump.type = 'button';
+      jump.className = 'citem__go';
+      jump.innerHTML = '<span class="citem__chk">' + (r.been ? '✓' : '') + '</span>'
+        + escapeHtml(r.it.name);
+      jump.addEventListener('click', () => {
+        switchTab('map');
+        setTimeout(() => state.map.setView([r.it.lat, r.it.lng], 16), 80);
+      });
+      row.appendChild(jump);
+      if (!r.been) {
+        const rec = document.createElement('button');
+        rec.type = 'button';
+        rec.className = 'mapsearch__rec';
+        rec.textContent = '記録';
+        rec.addEventListener('click', () => {
+          switchTab('map');
+          setTimeout(() => {
+            state.map.setView([r.it.lat, r.it.lng], 16);
+            recordLandmark(r.it.name, { tag: col.tag || '' }, r.it.lat, r.it.lng);
+          }, 80);
+        });
+        row.appendChild(rec);
+      }
+      box.appendChild(row);
+    }
+  }
+
+  // 地図にこのリストを出す。まだ行っていない所が見えるのが目的なので、
+  // 行った所は薄く、まだの所をはっきり出す。
+  async function showCollectionOnMap() {
+    const col = state.curCol;
+    if (!col) return;
+    const visits = await Store.getAllVisits();
+    state.colLayerName = col.name;
+    if (state.colLayer) { state.map.removeLayer(state.colLayer); state.colLayer = null; }
+    const g = L.layerGroup();
+    for (const it of col.items) {
+      const been = visitedItem(it, visits);
+      const m = L.circleMarker([it.lat, it.lng], {
+        radius: been ? 5 : 8,
+        color: been ? '#9aa7b8' : '#c0392b',
+        fillColor: been ? '#c9d2e0' : '#e8a33d',
+        fillOpacity: been ? 0.5 : 0.95,
+        weight: 2,
+      });
+      m.bindTooltip((been ? '✓ ' : '') + it.name);
+      m.on('click', () => {
+        if (been) { toast(it.name + '：記録があります'); return; }
+        recordLandmark(it.name, { tag: col.tag || '' }, it.lat, it.lng);
+      });
+      g.addLayer(m);
+    }
+    state.colLayer = g.addTo(state.map);
+    switchTab('map');
+    const b = L.latLngBounds(col.items.map((i) => [i.lat, i.lng]));
+    setTimeout(() => {
+      state.map.invalidateSize();
+      state.map.fitBounds(b.pad(0.1));
+    }, 120);
+    $('#btn-col-clear').hidden = false;
+    $('#btn-col-clear').textContent = '「' + col.name + '」を消す';
+    toast('まだの所を濃い色で出しています');
+  }
+
+  function clearCollectionLayer() {
+    if (state.colLayer) { state.map.removeLayer(state.colLayer); state.colLayer = null; }
+    const b = $('#btn-col-clear');
+    if (b) b.hidden = true;
+  }
+
+  async function newCustomCollection() {
+    const name = prompt('リストの名前（例: 聖地巡礼、地元の祭り）');
+    if (!name || !name.trim()) return;
+    const list = await customCollections();
+    const id = 'c-' + Date.now().toString(36);
+    list.push({ id, name: name.trim(), mark: '📋', tag: '', note: '自分で作ったリスト', items: [] });
+    await saveCustom(list);
+    renderCollect();
+    toast('作りました。「場所を追加」で足していけます');
+  }
+
+  async function deleteCustomCollection() {
+    const col = state.curCol;
+    if (!col || col.builtin) return;
+    if (!confirm('「' + col.name + '」を削除しますか？\n記録そのものは消えません。')) return;
+    const list = (await customCollections()).filter((c) => c.id !== col.id);
+    await saveCustom(list);
+    closeCollection();
+    toast('削除しました');
+  }
+
+  // 自分のリストに場所を足す。名前だけだと地図に出せないので、
+  // 場所検索（手元＋インターネット）で座標ごと選んでもらう。
+  async function addToCustomCollection() {
+    const col = state.curCol;
+    if (!col || col.builtin) return;
+    const word = prompt('追加する場所の名前（例: 大洗磯前神社）');
+    if (!word || !word.trim()) return;
+    const text = word.trim();
+    let hits = [];
+    toast('探しています…');
+    try { hits = await searchOnline(text); } catch (e) { hits = []; }
+    if (!hits.length) {
+      const visits = await Store.getAllVisits();
+      hits = searchPlaces(text, 5, visits).filter((h) => h.src === 'visit');
+    }
+    if (!hits.length) { toast('見つかりませんでした'); return; }
+    const pick = hits.length === 1 ? hits[0] : hits[Math.max(0, chooseIndex(hits))];
+    if (!pick) return;
+    const list = await customCollections();
+    const target = list.find((c) => c.id === col.id);
+    if (!target) return;
+    if (target.items.some((i) => i.name === pick.name)) { toast('もう入っています'); return; }
+    target.items.push({ name: pick.name, lat: pick.lat, lng: pick.lng });
+    await saveCustom(list);
+    state.curCol = target;
+    await renderCollectItems();
+    toast(pick.name + ' を追加しました');
+  }
+
+  // 候補が複数あるときに1つ選んでもらう。番号で聞く（選択画面を別に作らない）。
+  function chooseIndex(hits) {
+    const lines = hits.map((h, i) => (i + 1) + '. ' + h.name + '（' + h.sub + '）').join('\n');
+    const a = prompt('どれですか？ 番号を入れてください。\n\n' + lines, '1');
+    const n = parseInt(a, 10);
+    return isFinite(n) && n >= 1 && n <= hits.length ? n - 1 : -1;
+  }
+
+  function initCollect() {
+    const back = $('#btn-collect-back');
+    if (!back) return;
+    back.addEventListener('click', closeCollection);
+    $('#btn-collect-map').addEventListener('click', showCollectionOnMap);
+    $('#btn-collect-new').addEventListener('click', newCustomCollection);
+    $('#btn-cdet-add').addEventListener('click', addToCustomCollection);
+    $('#btn-cdet-del').addEventListener('click', deleteCustomCollection);
+    let t = null;
+    $('#cdet-filter').addEventListener('input', () => {
+      clearTimeout(t); t = setTimeout(renderCollectItems, 180);
+    });
+    $('#cdet-todo').addEventListener('change', renderCollectItems);
+    const clr = $('#btn-col-clear');
+    if (clr) clr.addEventListener('click', clearCollectionLayer);
   }
 
   // ---------------------------------------------------------------

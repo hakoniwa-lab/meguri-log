@@ -35,6 +35,7 @@
   <button class="tab is-active" data-tab="map">地図</button>
   <button class="tab" data-tab="list">一覧</button>
   <button class="tab" data-tab="history">記録</button>
+  <button class="tab" data-tab="collect">集める</button>
   <button class="tab" data-tab="settings">設定</button>
 </nav>
 
@@ -63,6 +64,8 @@
     <!-- ランドマークは地図を動かすたびに勝手に取りに行かず、押したときだけ探す。
          いつ検索しているのかが分かり、地図の提供元への負荷も減る。 -->
     <button type="button" id="btn-search-area" class="searcharea" hidden>この範囲で探す</button>
+    <!-- 集めるリストを地図に出しているときだけ出る。消し方が分からなくならないように -->
+    <button type="button" id="btn-col-clear" class="colclear" hidden></button>
     <!-- 表示の切り替えは1枚にまとめる。
          アイコンのボタンを縦に並べていたが、4つ＋2つで約290pxになり、
          地図の最小の高さ(320px)とほぼ同じ。狭い端末では右端がボタンで埋まっていた。 -->
@@ -113,6 +116,42 @@
     </div>
     <p class="hist-summary" id="hist-summary"></p>
     <div id="history" class="list"></div>
+  </section>
+
+  <!-- 集めるリスト。行った場所にチェックが入り、まだの場所が分かる。
+       タグ（何で行ったか）とは別の軸。姫路城は「城」であり同時に「世界遺産」なので、
+       タグに混ぜると必ずどちらかを捨てることになる。 -->
+  <section class="panel" id="panel-collect">
+    <div id="collect-home">
+      <p class="collect-lead">行った場所にチェックが入ります。<b>まだの場所</b>も地図で見られます。</p>
+      <div id="collect-list" class="list"></div>
+      <div class="collect-mine">
+        <h3>自分のリスト</h3>
+        <p class="muted">一覧に無いもの（アニメの聖地、地元の祭りなど）は自分で作れます。</p>
+        <div id="collect-custom" class="list"></div>
+        <button id="btn-collect-new" class="btn btn--sub btn--slim">リストを作る</button>
+      </div>
+    </div>
+
+    <div id="collect-detail" hidden>
+      <div class="cdet__head">
+        <button id="btn-collect-back" class="linkbtn">← 一覧へ</button>
+        <button id="btn-collect-map" class="linkbtn linkbtn--edit">地図に出す</button>
+      </div>
+      <h2 class="cdet__title" id="cdet-title"></h2>
+      <div class="prog"><div class="prog__bar"><span id="cdet-bar"></span></div>
+        <p class="prog__text" id="cdet-text"></p></div>
+      <p class="muted" id="cdet-note"></p>
+      <div class="filter">
+        <input type="search" id="cdet-filter" placeholder="名前で絞り込む">
+        <label class="filter__only"><input type="checkbox" id="cdet-todo"> まだの分だけ</label>
+      </div>
+      <div id="cdet-items" class="list"></div>
+      <div class="cdet__acts" id="cdet-acts" hidden>
+        <button id="btn-cdet-add" class="btn btn--sub btn--slim">場所を追加</button>
+        <button id="btn-cdet-del" class="btn btn--danger btn--slim">このリストを削除</button>
+      </div>
+    </div>
   </section>
 
   <section class="panel" id="panel-settings">
