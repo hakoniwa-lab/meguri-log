@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v40';
+  const APP_VERSION = 'v41';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -2989,6 +2989,10 @@
   // 「もう行った」と見なす距離。城や霊場は敷地が広く、入口で記録することも
   // 門の中で記録することもあるので、ピンの統合(50m)より広く取る。
   const COLLECT_NEAR = 400;
+  // 名前がぴったり同じときだけ、ここまで離れていても同じ場所とみなす。
+  // 高野山のように境内が広い所や、駐車場で記録した場合を拾うため。
+  // ★広げすぎない★ 隣り合った別の城や札所を巻き込む。
+  const COLLECT_NEAR_NAMED = 2000;
 
   async function loadCollections() {
     if (state.collections) return state.collections;
@@ -3016,18 +3020,30 @@
   // 名前は完全一致だけだと拾えない（「姫路城」と「国宝 姫路城」）ので、
   // どちらかがどちらかを含んでいれば同じものとして扱う。
   // 返す値: '' / 'auto'（記録がある） / 'hand'（手で付けた）
+  // 名前の比べ方。空白と括弧だけ落として、あとはそのまま比べる。
+  const nameKey = (s) => String(s || '').replace(/[\s　（）()「」『』]/g, '');
+
   function visitedItem(item, visits, hand) {
-    const nm = (item.name || '').trim();
+    const nm = nameKey(item.name);
     for (const v of visits) {
-      const vn = (v.place && v.place.name || '').trim();
-      if (nm && vn && (vn === nm || (nm.length >= 3 && vn.indexOf(nm) >= 0)
-          || (vn.length >= 3 && nm.indexOf(vn) >= 0))) return 'auto';
-      if (v.coords && typeof v.coords.lat === 'number'
-          && distMeters(v.coords.lat, v.coords.lng, item.lat, item.lng) <= COLLECT_NEAR) return 'auto';
+      const vn = nameKey(v.place && v.place.name);
+      const same = !!(nm && vn && nm === vn);
+      if (v.coords && typeof v.coords.lat === 'number') {
+        // ★名前は「距離をどこまで許すか」にだけ使う★
+        // 以前は「片方の名前がもう片方に含まれていれば同じ場所」としていたが、
+        // それだと 佐倉城（100名城）を記録しただけで 本佐倉城（続100名城）にも
+        // チェックが付いた。3.9km離れた別の城で、本人の指摘で発覚した。
+        // 「〜城」「〜寺」は前に字が付くだけで別の場所になるので、部分一致は使わない。
+        const d = distMeters(v.coords.lat, v.coords.lng, item.lat, item.lng);
+        if (d <= (same ? COLLECT_NEAR_NAMED : COLLECT_NEAR)) return 'auto';
+      } else if (same) {
+        // 座標の無い記録（市区町村をタップしただけ等）は名前だけで見るしかない
+        return 'auto';
+      }
     }
     // ★手で付けたぶん★ 昔に行ったが記録していない、というのが普通にある。
     // 自動判定だけだと、その分は永久に埋まらない。
-    return (hand && hand.indexOf(nm) >= 0) ? 'hand' : '';
+    return (hand && hand.indexOf(item.name) >= 0) ? 'hand' : '';
   }
 
   // 同梱のリストに、自分で足したぶんを混ぜる。
