@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v33';
+  const APP_VERSION = 'v34';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -685,6 +685,12 @@
       let err = null;
       try { list = await searchOnline(text); } catch (e) { err = e; }
       if (mine0 !== seq) return;                 // 探している間に打ち直された
+      // 施設名で見つからなかったときだけ、住所として探し直す。
+      // 地図に登録の無い店でも、住所が分かればその場所へ飛べる。
+      if (!err && !list.length && looksAddress(text)) {
+        try { list = await searchAddress(text); } catch (e) { /* 出せるものが無いだけ */ }
+        if (mine0 !== seq) return;
+      }
       if (b) b.remove();
       hits.appendChild(headRow(
         err ? '地図から探せませんでした（電波の状態を確かめてください）'
@@ -693,6 +699,14 @@
         it.been = beenThere(lastVisits, it.name, it.lat, it.lng);
         hits.appendChild(rowFor(it, true));
       });
+      if (!err && !list.length) {
+        // 行き止まりにしない。自分で登録する道があることをその場で伝える。
+        const n = document.createElement('div');
+        n.className = 'mapsearch__none';
+        n.textContent = '地図に登録が無い場所は出てきません。'
+          + '地図を動かして、その地点を長押しすると自分で登録できます。';
+        hits.appendChild(n);
+      }
       hits.hidden = false;
     }
 
@@ -732,7 +746,9 @@
         close();
         q.blur();
         state.map.setView([it.lat, it.lng], it.zoom);
-        recordLandmark(it.name, { tag: it.tag || '' }, it.lat, it.lng);
+        // 住所は場所の名前にならない。名前を入れてもらう側へ回す。
+        if (it.kind === 'addr') recordAtPoint(it.lat, it.lng);
+        else recordLandmark(it.name, { tag: it.tag || '' }, it.lat, it.lng);
       });
       row.appendChild(rec);
       return row;
@@ -777,6 +793,44 @@
         });
       }
       return out;
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  // 住所から探す（国土地理院）。
+  // Nominatim は日本の番地（広垂1-1-1）をほぼ返せないが、こちらは丁目・番・号まで当てる。
+  // 逆に施設名には弱い（「金沢城」で北海道当別町金沢が返る）ので、
+  // ★施設名で見つからなかったときの控えにしか使わない★。
+  const GSI_SEARCH = 'https://msearch.gsi.go.jp/address-search/AddressSearch';
+
+  // 住所らしいか。番地の数字か、丁目などの語があるものだけ送る。
+  // 送りすぎると「近江町市場」で山形県近江が返るような、惜しい間違いが増える。
+  function looksAddress(text) {
+    return /[0-9０-９]/.test(text)
+      || /(丁目|番地|字)/.test(text)
+      || /^(北海道|東京都|京都府|大阪府|.{2,3}県)/.test(text);
+  }
+
+  async function searchAddress(text) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 10000);
+    try {
+      const r = await fetch(GSI_SEARCH + '?q=' + encodeURIComponent(text), { signal: ctrl.signal });
+      if (!r.ok) throw new Error('address search failed');
+      const j = await r.json();
+      return (Array.isArray(j) ? j : []).slice(0, 6).map((f) => {
+        const c = f.geometry && f.geometry.coordinates;
+        const title = (f.properties && f.properties.title || '').trim();
+        if (!c || !title) return null;
+        return {
+          kind: 'addr',
+          name: title,
+          sub: '📍 住所',
+          tag: '',
+          lat: parseFloat(c[1]), lng: parseFloat(c[0]), zoom: 17,
+        };
+      }).filter((it) => it && isFinite(it.lat) && isFinite(it.lng));
     } finally {
       clearTimeout(t);
     }

@@ -10,6 +10,13 @@
   --danger:#c0392b;
 }
 *{box-sizing:border-box}
+/* ★重ね順は下から上へ この順★ 個別に決めると必ずどこかが前に出すぎる。
+     500  地図の上のボタン類
+    1000  Leaflet のコントロール（+/- など。ライブラリ側の値なので動かせない）
+    1100  .mapsearch    … Leaflet の +/- より前（候補が隠れるため）
+    1300  .sheet        … 記録・編集の画面。検索バーより前に出す
+    1400  .toast        … 記録画面の上にも出す必要がある
+    1500  .updatebar    … 一番上 */
 /* ★hidden を最優先で効かせる★
    .mkinds{display:flex} のように display を持つクラスは、ブラウザ既定の
    [hidden]{display:none} に勝ってしまう。そのため hidden を付けても消えず、
@@ -100,7 +107,7 @@ a{color:var(--navy)}
 .iconbtn{appearance:none;border:0;background:none;font-size:26px;line-height:1;color:var(--muted);cursor:pointer;padding:0 4px}
 
 /* ---- 記録シート ---- */
-.sheet{position:fixed; inset:0; z-index:1000; display:none}
+.sheet{position:fixed; inset:0; z-index:1300; display:none}
 .sheet.is-open{display:block}
 .sheet__backdrop{position:absolute; inset:0; background:rgba(20,26,38,.45)}
 .sheet__body{
@@ -128,7 +135,7 @@ a{color:var(--navy)}
 .toast{
   position:fixed; left:50%; bottom:24px; transform:translateX(-50%) translateY(20px);
   background:var(--ink); color:#fff; padding:11px 18px; border-radius:99px;
-  font-size:13.5px; opacity:0; pointer-events:none; transition:.25s; z-index:1200; max-width:90vw; text-align:center;
+  font-size:13.5px; opacity:0; pointer-events:none; transition:.25s; z-index:1400; max-width:90vw; text-align:center;
 }
 .toast.is-on{opacity:.96; transform:translateX(-50%) translateY(0)}
 
@@ -526,7 +533,7 @@ a{color:var(--navy)}
 /* ---- 地図の場所検索 ---- */
 /* z-index は Leaflet のコントロール(1000)より上。指定しないと、候補の上に
    地図の +/- ボタンが描かれて読めなくなる（実際にそうなっていた）。 */
-.mapsearch{position:relative; z-index:1200; margin:0 0 8px}
+.mapsearch{position:relative; z-index:1100; margin:0 0 8px}
 .mapsearch input{
   width:100%; padding:9px 34px 9px 12px; font-size:14px;
   border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--ink);
