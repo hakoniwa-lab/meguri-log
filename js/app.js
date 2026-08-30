@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v37';
+  const APP_VERSION = 'v38';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -2980,6 +2980,10 @@
     { id: 'chichibu34', file: './data/collections/chichibu34.json' },
     { id: 'meisui100',  file: './data/collections/meisui100.json' },
     { id: 'taki100',    file: './data/collections/taki100.json' },
+    { id: 'hyakumeizan', file: './data/collections/hyakumeizan.json' },
+    { id: 'lighthouse50', file: './data/collections/lighthouse50.json' },
+    { id: 'sankei',     file: './data/collections/sankei.json' },
+    { id: 'sanmeien',   file: './data/collections/sanmeien.json' },
   ];
 
   // 「もう行った」と見なす距離。城や霊場は敷地が広く、入口で記録することも
