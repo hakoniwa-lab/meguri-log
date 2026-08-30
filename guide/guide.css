@@ -1,0 +1,88 @@
+/* めぐログ 読みもの用のスタイル。
+   アプリ本体の style.css は地図まわりが大半で記事には要らないので、こちらは別に持つ。
+   色はアプリと揃える（紺 #2c3e62 / 琥珀 #e8a33d）。 */
+:root{
+  --bg:#f6f4ef;
+  --surface:#ffffff;
+  --line:#e2ddd1;
+  --ink:#1f2733;
+  --muted:#6b7684;
+  --navy:#2c3e62;
+  --amber:#e8a33d;
+  --warn-bg:#fdf3e2;
+  --warn-ink:#8a5a12;
+  --max:660px;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#191b20; --surface:#22252c; --line:#333842;
+    --ink:#e9ecf2; --muted:#a3adbb; --navy:#9db4de; --amber:#e8a33d;
+    --warn-bg:#2e2617; --warn-ink:#e3b978;
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0; padding:0}
+body{
+  background:var(--bg); color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","Noto Sans JP","Yu Gothic",Meiryo,sans-serif;
+  line-height:1.85; -webkit-text-size-adjust:100%;
+}
+.app{max-width:var(--max); margin:0 auto; padding:20px 16px 56px}
+a{color:var(--navy)}
+
+.guide-nav{font-size:12.5px; color:var(--muted); margin-bottom:18px}
+.guide-nav a{color:var(--muted)}
+
+.app-header{margin-bottom:22px}
+.app-header__eyebrow{margin:0 0 8px; color:var(--amber); font-weight:700; font-size:12.5px; letter-spacing:.04em}
+.app-header__title{margin:0 0 12px; font-size:26px; line-height:1.45; color:var(--ink)}
+.app-header__lead{margin:0; font-size:14.5px; color:var(--muted)}
+
+.card{
+  background:var(--surface); border:1px solid var(--line); border-radius:12px;
+  padding:20px 18px; margin:0 0 16px;
+}
+.card h2{margin:0 0 12px; font-size:18px; line-height:1.5; color:var(--navy)}
+.card h3{margin:22px 0 8px; font-size:15px; color:var(--ink)}
+.card p{margin:0 0 12px; font-size:14.5px}
+.card p:last-child{margin-bottom:0}
+.card ul,.card ol{margin:0 0 12px; padding-left:1.3em}
+.card li{margin:6px 0; font-size:14.5px}
+strong{font-weight:700}
+
+.guide-lead{font-size:15px}
+.intro-points{
+  margin:14px 0 0; padding:14px 16px 14px 32px;
+  background:var(--bg); border-radius:9px; border:1px solid var(--line);
+}
+.intro-points li{font-size:13.5px; margin:5px 0}
+
+.guide-table{width:100%; border-collapse:collapse; font-size:13.5px}
+.guide-table th,.guide-table td{border:1px solid var(--line); padding:8px 10px; text-align:left}
+.guide-table th{background:var(--bg); font-weight:700; white-space:nowrap}
+.guide-table td.num{text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
+.table-scroll{overflow-x:auto; -webkit-overflow-scrolling:touch}
+
+.guide-note{
+  background:var(--warn-bg); color:var(--warn-ink); border-radius:9px;
+  padding:14px 16px; font-size:13.5px; margin:14px 0 0;
+}
+.guide-note strong{color:inherit}
+
+.guide-cta{text-align:center; margin:26px 0 8px}
+.btn{
+  display:inline-block; padding:14px 30px; border-radius:99px;
+  background:var(--navy); color:#fff; text-decoration:none;
+  font-weight:700; font-size:15.5px; box-shadow:0 4px 14px rgba(20,30,50,.18);
+}
+.btn--sub{background:transparent; color:var(--navy); border:1.5px solid var(--navy); box-shadow:none}
+.guide-cta p{margin:10px 0 0; font-size:12.5px; color:var(--muted)}
+
+.faq-item{border-top:1px solid var(--line); padding-top:14px; margin-top:14px}
+.faq-item:first-of-type{border-top:0; padding-top:0; margin-top:0}
+.faq-item h3{margin:0 0 6px}
+
+.app-footer{margin-top:28px; text-align:center; font-size:12px; color:var(--muted)}
+.app-footer a{color:var(--muted)}
+.sp-only{display:none}
+@media (max-width:480px){ .sp-only{display:inline} .app-header__title{font-size:23px} }
