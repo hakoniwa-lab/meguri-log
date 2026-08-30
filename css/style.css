@@ -699,3 +699,27 @@ a{color:var(--navy)}
   font-size:10.5px; font-style:normal; font-weight:700; color:var(--muted);
   vertical-align:middle;
 }
+
+/* ---- 使い方 ---- */
+/* 機能が増えて、開いただけでは気づけないものが多くなった。
+   ただ最初から全部開いていると設定が読めなくなるので、たたんでおく。 */
+.howto summary{
+  display:flex; align-items:center; justify-content:space-between;
+  cursor:pointer; list-style:none; gap:10px;
+}
+.howto summary::-webkit-details-marker{display:none}
+.howto summary h2{margin:0}
+.howto__more{
+  flex:0 0 auto; padding:4px 12px; border:1.5px solid var(--navy); border-radius:99px;
+  font-size:12px; font-weight:700; color:var(--navy);
+}
+.howto[open] .howto__more::after{content:'';}
+.howto[open] .howto__more{color:var(--muted); border-color:var(--line)}
+.howto[open] .howto__more::before{content:'とじる'}
+.howto[open] .howto__more{font-size:0}
+.howto[open] .howto__more::before{font-size:12px}
+.howto h3{margin:18px 0 6px; font-size:14px; color:var(--navy)}
+.howto h3.warn-h{color:var(--danger)}
+.howto ul{margin:0; padding-left:1.2em}
+.howto li{margin:5px 0; font-size:13px; line-height:1.75}
+.howto .warn-i{color:var(--danger); font-style:normal}
