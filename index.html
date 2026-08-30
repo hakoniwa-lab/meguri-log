@@ -155,6 +155,11 @@
         <label class="filter__only"><input type="checkbox" id="cdet-todo"> まだの分だけ</label>
       </div>
       <div id="cdet-items" class="list"></div>
+      <!-- 100件あると上まで戻るのが大変なので、下にも同じものを置く -->
+      <div class="cdet__head cdet__head--bottom">
+        <button id="btn-collect-back2" class="linkbtn">← 一覧へ</button>
+        <button id="btn-collect-map2" class="linkbtn linkbtn--edit">地図に出す</button>
+      </div>
       <div class="cdet__acts" id="cdet-acts" hidden>
         <button id="btn-cdet-add" class="btn btn--sub btn--slim">場所を追加</button>
         <button id="btn-cdet-share" class="btn btn--sub btn--slim">このリストを渡す</button>

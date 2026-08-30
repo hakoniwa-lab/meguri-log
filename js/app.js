@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v41';
+  const APP_VERSION = 'v42';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -3325,10 +3325,10 @@
       const k = tagKeyOf(v.tag);
       counts.set(k, (counts.get(k) || 0) + 1);
     }
-    const opts = TAGS.filter((t) => counts.get(t.key));
-    if (!opts.length) { toast('位置つきの記録がまだありません'); return; }
+    // ★全部のタグを出す★ 記録があるものだけ並べると、何が選べるのか分からない
+    const opts = TAGS.slice();
     const lines = opts.map((t, i) => (i + 1) + '. ' + t.mark + ' ' + t.label
-      + '（' + counts.get(t.key) + '件）').join('\n');
+      + '（' + (counts.get(t.key) || 0) + '件）').join('\n');
     const a = prompt('どのタグからリストを作りますか？ 番号を入れてください。\n\n' + lines, '1');
     const n = parseInt(a, 10);
     if (!(n >= 1 && n <= opts.length)) return;
@@ -3501,6 +3501,9 @@
     if (!back) return;
     back.addEventListener('click', closeCollection);
     $('#btn-collect-map').addEventListener('click', showCollectionOnMap);
+    // 下にも同じものを置いてある（100件あると上まで戻るのが大変）
+    $('#btn-collect-back2').addEventListener('click', closeCollection);
+    $('#btn-collect-map2').addEventListener('click', showCollectionOnMap);
     $('#btn-collect-new').addEventListener('click', newCustomCollection);
     $('#btn-cdet-add').addEventListener('click', addToCustomCollection);
     $('#btn-cdet-del').addEventListener('click', deleteCustomCollection);
@@ -3636,12 +3639,14 @@
     Array.from(state.pickTags).forEach((k) => { if (!counts.get(k)) state.pickTags.delete(k); });
 
     box.innerHTML = '';
+    // ★全部のタグを出す★ 記録があるものだけ出していたが、
+    // それだと「このタグは選べないのか、そもそも無いのか」が分からない。
+    // 件数を添えて全部並べ、0件のものは薄く出す（選ぶことはできる）。
     TAGS.forEach((t) => {
       const n = counts.get(t.key) || 0;
-      if (!n) return;                        // 記録の無いタグは出さない
       const b = document.createElement('button');
       b.type = 'button';
-      b.className = 'pktag' + (state.pickTags.has(t.key) ? ' is-on' : '');
+      b.className = 'pktag' + (state.pickTags.has(t.key) ? ' is-on' : '') + (n ? '' : ' is-zero');
       b.innerHTML = t.mark + ' ' + escapeHtml(t.label) + ' <small>' + n + '</small>';
       b.addEventListener('click', () => {
         if (state.pickTags.has(t.key)) state.pickTags.delete(t.key);
@@ -3651,9 +3656,6 @@
       });
       box.appendChild(b);
     });
-    if (!box.children.length) {
-      box.innerHTML = '<p class="muted">まだ記録がありません。</p>';
-    }
     schedulePick();
   }
 

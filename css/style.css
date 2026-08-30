@@ -723,3 +723,9 @@ a{color:var(--navy)}
 .howto ul{margin:0; padding-left:1.2em}
 .howto li{margin:5px 0; font-size:13px; line-height:1.75}
 .howto .warn-i{color:var(--danger); font-style:normal}
+/* リストの中身の一番下にも「一覧へ戻る」「地図に出す」を置く。
+   100件あると上まで戻るのが大変なため。 */
+.cdet__head--bottom{border-bottom:0; border-top:1px solid var(--line)}
+/* 記録が0件のタグ。選べるが、あることが分かる程度に薄くする */
+.pktag.is-zero{opacity:.5}
+.pktag.is-zero.is-on{opacity:1}
