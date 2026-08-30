@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v34';
+  const APP_VERSION = 'v35';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -48,6 +48,10 @@
     { key: 'port',  mark: '⛴️', label: '港・フェリー' },
     { key: 'shrine',mark: '⛩️', label: '神社' },
     { key: 'temple',mark: '📿', label: 'お寺' },
+    { key: 'zoo',   mark: '🦁', label: '動物園・水族館' },
+    { key: 'museum',mark: '🎨', label: '博物館・美術館' },
+    { key: 'garden',mark: '🌸', label: '公園・庭園' },
+    { key: 'tower', mark: '🗼', label: '展望台・タワー' },
     { key: 'shop',  mark: '🛍️', label: '買い物' },
     { key: 'conv',  mark: '🏪', label: 'コンビニ' },
     { key: 'food',  mark: '🍽️', label: '食事' },
@@ -56,12 +60,19 @@
     { key: 'park',  mark: '🚗', label: '駐車場' },
     { key: 'toilet',mark: '🚻', label: 'トイレ' },
     { key: 'mtn',   mark: '⛰️', label: '山・登山' },
+    { key: 'fall',  mark: '🏞️', label: '滝' },
     { key: 'dam',   mark: '🌊', label: 'ダム' },
+    { key: 'camp',  mark: '⛺', label: 'キャンプ場' },
+    { key: 'light', mark: '💡', label: '灯台' },
     { key: 'onsen', mark: '♨️', label: '温泉・銭湯' },
     { key: 'home',  mark: '🏠', label: '実家・知人宅' },
     { key: 'other', mark: '✳️', label: 'その他' },
   ];
-  const tagOf = (k) => TAGS.find((t) => t.key === (k || '')) || TAGS[0];
+  // ★key は保存済みの記録が参照している。絶対に付け替えない★
+  // v35 で公園を足すとき 'park' を使い回しかけたが、それをすると駐車場として
+  // 保存済みの記録が公園に化ける。公園は 'garden' にした。
+  const tagKeyOf = (k) => k || '';
+  const tagOf = (k) => TAGS.find((t) => t.key === tagKeyOf(k)) || TAGS[0];
 
   // 地図の種類。訪問済みを塗ると標準の地図では地名が読めなくなるので、淡色を選べるようにする。
   // 国土地理院のタイルは日本の外には無いので、選ばれている間は引きの限界を 5 で止める
@@ -121,6 +132,7 @@
     pickFile: null,        // 共有用に先に作っておく、選んだ分のファイル
     pickTimer: null,
     pickSeq: 0,
+    hiddenTags: new Set(),   // 記録画面に出さないタグ（設定で選ぶ）
     lines: null,        // 移動の線のレイヤー
     linesOn: true,
     lineDay: null,      // 表示する日（nullは全部）。既定は最新の日
@@ -174,6 +186,7 @@
   async function boot() {
     await Store.init();
     state.mapStyle = (await Store.getMeta('mapStyle')) || 'osm';
+    state.hiddenTags = new Set((await Store.getMeta('hiddenTags')) || []);
     state.geo.pref = sortByCode(await fetch(LEVELS.pref.file).then((r) => r.json()));
     await refreshVisited();
 
@@ -891,8 +904,22 @@
     if (/(寺|院|大師|観音)$/.test(name)) return 'temple';
     if (/(温泉|の湯|銀湯)$/.test(name)) return 'onsen';
     if (/ダム$/.test(name)) return 'dam';
+    if (/(滝|の滝)$/.test(name)) return 'fall';
+    if (/灯台$/.test(name)) return 'light';
+    if (/(水族館|動物園)$/.test(name)) return 'zoo';
+    if (/(博物館|美術館|記念館|資料館)$/.test(name)) return 'museum';
+    if (/(公園|庭園|植物園)$/.test(name)) return 'garden';
+    if (/(タワー|展望台)$/.test(name)) return 'tower';
+    if (/キャンプ場$/.test(name)) return 'camp';
     if (/^(supermarket|department_store|mall|shop)$/.test(type)) return 'shop';
-    if (/^(attraction|theme_park|zoo|aquarium|museum|park|garden)$/.test(type)) return 'play';
+    if (/^(zoo|aquarium)$/.test(type)) return 'zoo';
+    if (/^(museum|gallery|artwork)$/.test(type)) return 'museum';
+    if (/^(park|garden)$/.test(type)) return 'garden';
+    if (/^(waterfall)$/.test(type)) return 'fall';
+    if (/^(lighthouse)$/.test(type)) return 'light';
+    if (/^(camp_site|caravan_site)$/.test(type)) return 'camp';
+    if (/^(viewpoint|tower)$/.test(type)) return 'tower';
+    if (/^(attraction|theme_park)$/.test(type)) return 'play';
     return '';
   }
 
@@ -1868,23 +1895,35 @@
   }
 
   // ---- 目的タグ ----
-  function initTagPicker() {
+  // ★設定で選んだタグだけを出す★
+  // タグは人によって使うものが全く違う。全部並べると記録画面が
+  // 10行になってメモ欄が画面の外に出るので、自分で間引けるようにした。
+  // 並びは変えない（位置が動くと押し間違える）。
+  function initTagPicker(extraKey) {
     const box = $('#tag-picker');
-    if (!box || box.childElementCount) return;
+    if (!box) return;
+    box.innerHTML = '';
+    const keep = tagKeyOf(extraKey);
     TAGS.forEach((t) => {
+      // 未設定は常に出す。編集中の記録が使っているタグも必ず出す
+      // （隠したままだと、編集で開いただけで別のタグに変わってしまう）。
+      if (t.key && t.key !== keep && state.hiddenTags.has(t.key)) return;
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'tagbtn' + (t.key === '' ? ' is-active' : '');
       b.dataset.tag = t.key;
-      b.innerHTML = '<span>' + t.mark + '</span>' + t.label;
+      b.innerHTML = '<span>' + t.mark + '</span>' + escapeHtml(t.label);
       b.addEventListener('click', () => setTagValue(t.key));
       box.appendChild(b);
     });
   }
 
   function setTagValue(key) {
+    const k = tagKeyOf(key);
+    // 隠してあるタグの記録を開いたときは、そのボタンを戻してから選ぶ
+    if (k && !$('#tag-picker .tagbtn[data-tag="' + k + '"]')) initTagPicker(k);
     $$('#tag-picker .tagbtn').forEach((b) =>
-      b.classList.toggle('is-active', b.dataset.tag === (key || '')));
+      b.classList.toggle('is-active', b.dataset.tag === k));
   }
 
   function getTagValue() {
@@ -2894,7 +2933,7 @@
     // 記録したあとに設定を開いたとき、バックアップの状況が古いままにならないように
     if (name === 'settings') {
       ensurePersistOnce().then(() => { renderPersistInfo(); renderDeviceInfo(); });
-      renderBackupStatus(); renderStorageInfo(); renderPickTags();
+      renderBackupStatus(); renderStorageInfo(); renderPickTags(); renderTagPrefs();
       prepareBackupFile(state.shareType);
     } else {
       releaseBackupFile();
@@ -3090,6 +3129,51 @@
     const ph = b.counts.photos ? '・写真 ' + b.counts.photos + '枚' : '';
     cnt.textContent = b.data.partialTags.join('・') + ' の記録 ' + b.counts.visits + '件' + ph + ' を書き出します。';
     cnt.classList.remove('is-none');
+  }
+
+  // ---------------------------------------------------------------
+  // 使うタグを選ぶ
+  // ---------------------------------------------------------------
+  // ここで外しても、既にそのタグで保存した記録はそのまま残る。
+  // 統計も「選んで書き出す」も絞らない（記録が見えなくなると困る）。
+  // 変わるのは「記録画面で選べるタグ」だけ。
+  async function renderTagPrefs() {
+    const box = $('#tag-prefs');
+    if (!box) return;
+    const used = new Map();
+    for (const v of await Store.getAllVisits()) {
+      const k = tagKeyOf(v.tag);
+      used.set(k, (used.get(k) || 0) + 1);
+    }
+    box.innerHTML = '';
+    TAGS.forEach((t) => {
+      if (!t.key) return;                       // 未設定は外せない
+      const on = !state.hiddenTags.has(t.key);
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'pktag' + (on ? ' is-on' : '');
+      b.dataset.tag = t.key;
+      const n = used.get(t.key) || 0;
+      b.innerHTML = t.mark + ' ' + escapeHtml(t.label) + (n ? ' <small>' + n + '</small>' : '');
+      b.addEventListener('click', async () => {
+        if (state.hiddenTags.has(t.key)) state.hiddenTags.delete(t.key);
+        else state.hiddenTags.add(t.key);
+        b.classList.toggle('is-on');
+        await Store.setMeta('hiddenTags', Array.from(state.hiddenTags));
+        initTagPicker();
+        renderTagPrefsCount();
+      });
+      box.appendChild(b);
+    });
+    renderTagPrefsCount();
+  }
+
+  function renderTagPrefsCount() {
+    const el = $('#tag-prefs-count');
+    if (!el) return;
+    const all = TAGS.filter((t) => t.key).length;
+    const on = all - state.hiddenTags.size;
+    el.textContent = '記録画面に ' + on + ' / ' + all + ' 種を出します。';
   }
 
   function initPickExport() {
