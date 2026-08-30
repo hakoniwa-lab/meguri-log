@@ -63,13 +63,22 @@
     <!-- ランドマークは地図を動かすたびに勝手に取りに行かず、押したときだけ探す。
          いつ検索しているのかが分かり、地図の提供元への負荷も減る。 -->
     <button type="button" id="btn-search-area" class="searcharea" hidden>この範囲で探す</button>
+    <!-- 表示の切り替えは1枚にまとめる。
+         アイコンのボタンを縦に並べていたが、4つ＋2つで約290pxになり、
+         地図の最小の高さ(320px)とほぼ同じ。狭い端末では右端がボタンで埋まっていた。 -->
+    <div class="layers" id="layers-panel" hidden>
+      <p class="layers__h">地図に出すもの</p>
+      <button type="button" class="layers__row" id="btn-pins"><span>📍</span>記録のピン</button>
+      <button type="button" class="layers__row" id="btn-lines"><span>〰️</span>その日の移動の線</button>
+      <button type="button" class="layers__row" id="btn-fill"><span>🎨</span>訪問済みの色</button>
+      <button type="button" class="layers__row is-off" id="btn-marks"><span>🏯</span>ランドマーク<small>通信します</small></button>
+      <p class="layers__h">地図の種類</p>
+      <div class="layers__styles" id="map-styles"></div>
+    </div>
     <!-- 「移動するだけ」と「記録する」は別の操作。
          地図で他の場所を見ているときに現在地へ戻りたいだけ、という場面が多いため分けている。 -->
     <div class="fabs">
-      <button id="btn-marks" class="fab fab--sub fab--icon is-off" title="城・駅・神社・お寺を表示／非表示">🏯</button>
-      <button id="btn-lines" class="fab fab--sub fab--icon" title="その日の移動の線を表示／非表示">〰️</button>
-      <button id="btn-pins" class="fab fab--sub fab--icon" title="記録のピンを表示／非表示">📍</button>
-      <button id="btn-fill" class="fab fab--sub fab--icon" title="訪問済みの色を表示／非表示">🎨</button>
+      <button id="btn-layers" class="fab fab--sub" aria-expanded="false">表示</button>
       <button id="btn-here" class="fab fab--sub">現在地へ</button>
       <button id="btn-here-record" class="fab">ここを記録</button>
     </div>
@@ -133,6 +142,26 @@
       </div>
       <p class="muted">写真も含めて1つのファイルにまとまります。<br>
         <b>機種変更のときは</b>、古い端末で書き出したファイルを新しい端末で読み込んでください。</p>
+    </div>
+
+    <!-- 人に渡す用の書き出し。上のバックアップは「全部」でないと機種変で困るので、
+         別のカードに分けてある。こちらは既定で写真・メモ・金額を外す。 -->
+    <div class="card">
+      <h2>選んで書き出す</h2>
+      <p class="muted">人に渡すとき用です。<b>選んだタグの記録だけ</b>を書き出します。<br>
+        写真・メモ・金額は<b>選ばないかぎり入りません</b>。</p>
+      <div class="picktags" id="pick-tags"></div>
+      <div class="pickopts">
+        <label><input type="checkbox" id="pick-photo"> 写真も入れる</label>
+        <label><input type="checkbox" id="pick-memo"> メモも入れる</label>
+        <label><input type="checkbox" id="pick-money"> 金額・評価も入れる</label>
+      </div>
+      <p class="pickcount" id="pick-count">タグを選んでください。</p>
+      <div class="btns">
+        <button id="btn-pick-share" class="btn" hidden disabled>選んだ分を送る</button>
+        <button id="btn-pick-export" class="btn btn--sub" disabled>選んだ分をファイルに保存</button>
+      </div>
+      <p class="warn">これは<b>バックアップではありません</b>。機種変更のときは上の「ファイルに保存」を使ってください。</p>
     </div>
 
     <div class="card">

@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v31';
+  const APP_VERSION = 'v32';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -51,6 +51,28 @@
   ];
   const tagOf = (k) => TAGS.find((t) => t.key === (k || '')) || TAGS[0];
 
+  // 地図の種類。訪問済みを塗ると標準の地図では地名が読めなくなるので、淡色を選べるようにする。
+  // 国土地理院のタイルは日本の外には無いので、選ばれている間は引きの限界を 5 で止める
+  // （止めないと日本の外まで引いたときに真っ白な画面になり、壊れたように見える）。
+  const MAP_STYLES = [
+    {
+      key: 'osm', label: '標準', minZoom: 3, maxZoom: 18,
+      url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+      attr: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    },
+    {
+      key: 'pale', label: '淡色', minZoom: 5, maxZoom: 18, maxNativeZoom: 16,
+      url: 'https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png',
+      attr: '<a href="https://maps.gsi.go.jp/development/ichiran.html">国土地理院</a>',
+    },
+    {
+      key: 'photo', label: '航空写真', minZoom: 5, maxZoom: 18,
+      url: 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg',
+      attr: '<a href="https://maps.gsi.go.jp/development/ichiran.html">国土地理院</a>',
+    },
+  ];
+  const styleOf = (k) => MAP_STYLES.find((m) => m.key === k) || MAP_STYLES[0];
+
   const DAYS = ['月', '火', '水', '木', '金', '土', '日', '不定休'];
   // 集めるものは御朱印だけではない。御城印・御船印なども同じ枠で記録する。
   // 既存の記録には kind が無いので、未設定は「御朱印」として扱う（GS_KIND[0]）。
@@ -79,6 +101,14 @@
     loadingCity: false,
     pins: null,         // 記録ピンのレイヤー
     pinsOn: true,
+    placeCache: null,   // まとめ済みの場所（ズームのたびに読み直さないため）
+    tiles: null,        // 地図タイルのレイヤー
+    mapStyle: 'osm',    // 地図の種類（標準／淡色／航空写真）
+    layersOpen: false,  // 表示パネルを開いているか
+    pickTags: new Set(),   // 「選んで書き出す」で選ばれたタグ
+    pickFile: null,        // 共有用に先に作っておく、選んだ分のファイル
+    pickTimer: null,
+    pickSeq: 0,
     lines: null,        // 移動の線のレイヤー
     linesOn: true,
     lineDay: null,      // 表示する日（nullは全部）。既定は最新の日
@@ -131,6 +161,7 @@
   // ---------------------------------------------------------------
   async function boot() {
     await Store.init();
+    state.mapStyle = (await Store.getMeta('mapStyle')) || 'osm';
     state.geo.pref = sortByCode(await fetch(LEVELS.pref.file).then((r) => r.json()));
     await refreshVisited();
 
@@ -174,20 +205,29 @@
   // ---------------------------------------------------------------
   function initMap() {
     state.map = L.map('map', { zoomControl: true }).setView([37.5, 137.5], 5);
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 18,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    }).addTo(state.map);
+    applyMapStyle(state.mapStyle);
+    buildStyleChips();
 
     drawLayer();
     renderPins();
     renderDayLines();
     buildMarkKindChips();
+    fitMapHeight();
+    watchMapHeight();
+    // 上に出る行（絞り込みチップなど）が増減すると地図の高さが変わる
+    window.addEventListener('resize', fitMapHeight);
+    window.addEventListener('orientationchange', () => setTimeout(fitMapHeight, 250));
+
+    initLayersPanel();
+    // ズームが変わるとピンのまとめ方も変わる。読み直しはせず描き直すだけ
+    state.map.on('zoomend', () => drawPins());
+
     $('#btn-marks').addEventListener('click', () => {
       state.marksOn = !state.marksOn;
-      $('#btn-marks').classList.toggle('is-off', !state.marksOn);
+      setToggle('#btn-marks', state.marksOn);
       $('#mark-kinds').hidden = !state.marksOn;
       showSearchArea(false);
+      fitMapHeight();
       renderLandmarks(true);
       if (!state.marksOn) toast('ランドマークを隠します');
     });
@@ -206,15 +246,16 @@
 
     $('#btn-lines').addEventListener('click', () => {
       state.linesOn = !state.linesOn;
-      $('#btn-lines').classList.toggle('is-off', !state.linesOn);
+      setToggle('#btn-lines', state.linesOn);
       const ld = $('#line-days');
       if (ld && !state.linesOn) ld.hidden = true;
       renderDayLines();
+      fitMapHeight();
       toast(state.linesOn ? '移動の線を表示します' : '移動の線を隠します');
     });
     $('#btn-pins').addEventListener('click', () => {
       state.pinsOn = !state.pinsOn;
-      $('#btn-pins').classList.toggle('is-off', !state.pinsOn);
+      setToggle('#btn-pins', state.pinsOn);
       renderPins();
       toast(state.pinsOn ? '記録のピンを表示します' : '記録のピンを隠します');
     });
@@ -227,7 +268,7 @@
     // 訪問済みの色を消す。地図そのものを読みたいときに使う。
     $('#btn-fill').addEventListener('click', () => {
       state.fillOn = !state.fillOn;
-      $('#btn-fill').classList.toggle('is-off', !state.fillOn);
+      setToggle('#btn-fill', state.fillOn);
       if (state.layer) state.layer.setStyle(styleFor);
       toast(state.fillOn ? '訪問済みの色を出します' : '訪問済みの色を隠します');
     });
@@ -241,6 +282,129 @@
     initMapSearch();
     $('#btn-here').addEventListener('click', () => locate(false));
     $('#btn-here-record').addEventListener('click', () => locate(true));
+  }
+
+  // 表示の切り替え。オン・オフの見た目を1か所で決める（行ごとに書くとズレる）
+  function setToggle(sel, on) {
+    const el = $(sel);
+    if (!el) return;
+    el.classList.toggle('is-off', !on);
+    el.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
+
+  function initLayersPanel() {
+    const btn = $('#btn-layers');
+    const box = $('#layers-panel');
+    if (!btn || !box) return;
+    ['#btn-pins', '#btn-lines', '#btn-fill'].forEach((sel) => setToggle(sel, true));
+    setToggle('#btn-marks', state.marksOn);
+
+    btn.addEventListener('click', (e) => { e.stopPropagation(); openLayers(!state.layersOpen); });
+    // パネルの中を押しても閉じない。閉じるのは外を押したときだけ
+    box.addEventListener('click', (e) => e.stopPropagation());
+    // 地図を触ったら閉じる。開いたままだと地図の右下が隠れる
+    state.map.on('click', () => openLayers(false));
+    state.map.on('movestart', () => openLayers(false));
+    document.addEventListener('click', () => openLayers(false));
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') openLayers(false); });
+  }
+
+  function openLayers(on) {
+    const box = $('#layers-panel');
+    const btn = $('#btn-layers');
+    if (!box || state.layersOpen === on) return;
+    state.layersOpen = on;
+    box.hidden = !on;
+    if (btn) btn.setAttribute('aria-expanded', on ? 'true' : 'false');
+  }
+
+  // 地図の種類を差し替える。タイルだけ入れ替え、記録のピンや塗り分けはそのまま残す。
+  function applyMapStyle(key) {
+    const st = styleOf(key);
+    state.mapStyle = st.key;
+    if (state.tiles) { state.map.removeLayer(state.tiles); state.tiles = null; }
+    state.tiles = L.tileLayer(st.url, {
+      minZoom: st.minZoom,
+      maxZoom: st.maxZoom,
+      maxNativeZoom: st.maxNativeZoom || st.maxZoom,
+      attribution: st.attr,
+    }).addTo(state.map);
+    // 地理院のタイルは日本の外に無い。引きの限界を上げて真っ白を避ける
+    state.map.setMinZoom(st.minZoom);
+    if (state.map.getZoom() < st.minZoom) state.map.setZoom(st.minZoom);
+    $$('#map-styles .mstyle').forEach((b) => b.classList.toggle('is-on', b.dataset.style === st.key));
+  }
+
+  function buildStyleChips() {
+    const box = $('#map-styles');
+    if (!box) return;
+    box.innerHTML = '';
+    MAP_STYLES.forEach((m) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'mstyle' + (m.key === state.mapStyle ? ' is-on' : '');
+      b.dataset.style = m.key;
+      b.textContent = m.label;
+      b.addEventListener('click', () => {
+        if (m.key === state.mapStyle) return;
+        applyMapStyle(m.key);
+        Store.setMeta('mapStyle', m.key);
+      });
+      box.appendChild(b);
+    });
+  }
+
+  // 地図の高さ。固定値（100vh - 230px）にしていたため、上に出る行が増えると
+  // 地図の下側が画面からはみ出していた。
+  //
+  // 上に並ぶ行を1つずつ数えるのではなく、「地図の下（説明文の下端）が画面の
+  // 下にちょうど来るように、はみ出したぶんを足し引きする」やり方にする。
+  // 数える対象が増えても数え漏らさず、行が増減しても同じ式で収まる。
+  // 引数を取らない入口。イベントの listener に直接渡しても回数が壊れないようにする
+  function fitMapHeight() { fitMapPass(0); }
+
+  function fitMapPass(pass) {
+    const el = $('#map');
+    const panel = $('#panel-map');
+    const hint = panel && panel.querySelector('.hint');
+    if (!el || !hint || !panel.classList.contains('is-active')) return;
+    if (!window.innerHeight) return;             // 画面が無い（裏に回った直後など）
+    const cur = el.getBoundingClientRect().height;
+    // ★下限はCSSの min-height から読む★
+    // ここに数字を書くと、CSS側を変えたときに食い違う。min-height は height に
+    // 勝つので、食い違うと「300pxにしたつもりが実際は320px」となり、
+    // 収まるまで測り直す処理が永遠に終わらない。
+    const floor = parseFloat(getComputedStyle(el).minHeight) || 0;
+    // スクロール位置に左右されないよう、文書内の位置で測る
+    const bottom = hint.getBoundingClientRect().bottom + window.scrollY;
+    const h = Math.max(floor, Math.round(cur + (window.innerHeight - bottom)));
+    if (Math.abs(h - cur) < 1) return;          // 収まった
+    el.style.height = h + 'px';
+    if (state.map) state.map.invalidateSize();
+    // 高さを変えた拍子に説明文の折り返しが変わることがあり、一度では合わない。
+    // 収まるまで数回だけ測り直す（収まった時点で上の return で止まる）。
+    // requestAnimationFrame は画面が裏に回っていると呼ばれないので使わない
+    // （裏で開き直したときに、地図の高さが合わないまま止まる）。
+    if (pass < 4) setTimeout(() => fitMapPass(pass + 1), 60);
+  }
+
+  // 上の行は、文字の折り返しやフォントの読み込みで後から高さが変わる。
+  // 初回に測っただけだと、その変化ぶんだけ地図がずれたままになる。
+  function watchMapHeight() {
+    const targets = ['.hero', '.tabs', '.levels', '#mark-kinds', '#line-days', '.mapsearch', '#panel-map .hint'];
+    if (typeof ResizeObserver === 'function') {
+      // 監視するのは地図より上と下の行だけ。地図自身を入れると、
+      // 高さを変える→通知が来る→また変える、と回り続ける
+      const ro = new ResizeObserver(() => fitMapHeight());
+      targets.forEach((sel) => { const e = $(sel); if (e) ro.observe(e); });
+    }
+    window.addEventListener('load', fitMapHeight);
+    // 裏に回っている間は画面の高さが取れず測れない。戻ってきたら測り直す
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) fitMapHeight();
+    });
+    // 起動直後は進捗の文字などが後から入って上の高さが変わる
+    setTimeout(fitMapHeight, 120);
   }
 
   function styleFor(feat) {
@@ -742,34 +906,93 @@
   // 記録のピン。座標を持つ記録だけを、タグの記号つきで置く。
   async function renderPins() {
     if (!state.map) return;
-    if (state.pins) { state.map.removeLayer(state.pins); state.pins = null; }
-    if (!state.pinsOn) return;
-
     const all = await Store.getAllVisits();
     const withCoords = all.filter((v) => v.coords && typeof v.coords.lat === 'number');
-    if (!withCoords.length) return;
-
     // ★同じ場所は1本のピンにまとめる★
     // よく行く場所を何度も記録すると、訪問ごとにピンが立って地図が読めなくなる。
-    const places = groupByPlace(withCoords);
+    state.placeCache = withCoords.length ? groupByPlace(withCoords) : [];
+    drawPins();
+  }
+
+  // ★重なったピンは丸1つに束ねる★
+  // 場所ごとにまとめても、全国を引きで見ると数百のピンが重なって数が読めない。
+  // 束ね方はズームだけで決まるので、地図を横に動かしただけでは組み替わらない
+  // （組み替わるとピンがちらついて、どれを見ていたのか分からなくなる）。
+  const CLUSTER_PX = 48;
+
+  function drawPins() {
+    if (!state.map) return;
+    if (state.pins) { state.map.removeLayer(state.pins); state.pins = null; }
+    if (!state.pinsOn) return;
+    const places = state.placeCache || [];
+    if (!places.length) return;
 
     const group = L.layerGroup();
-    for (const g of places) {
-      const v = g.items[0];                 // 最新の記録を代表にする
-      const t = tagOf(v.tag);
-      const icon = L.divIcon({
-        className: 'pin',
-        html: '<span class="pin__mark">' + t.mark + '</span>'
-          + (g.items.length > 1 ? '<b class="pin__count">' + g.items.length + '</b>' : ''),
-        iconSize: [34, 34],
-        iconAnchor: [17, 34],
-        popupAnchor: [0, -30],
-      });
-      const m = L.marker([g.lat, g.lng], { icon });
-      m.bindPopup(buildPinPopup(g, t));
-      group.addLayer(m);
+    for (const c of clusterPlaces(places)) {
+      group.addLayer(c.places.length === 1 ? placeMarker(c.places[0]) : clusterMarker(c));
     }
     state.pins = group.addTo(state.map);
+  }
+
+  function clusterPlaces(places) {
+    const z = state.map.getZoom();
+    const out = [];
+    for (const g of places) {
+      const p = state.map.project([g.lat, g.lng], z);
+      let best = null, bd = CLUSTER_PX;
+      for (const c of out) {
+        const d = Math.hypot(c.p.x - p.x, c.p.y - p.y);
+        if (d < bd) { best = c; bd = d; }
+      }
+      if (best) { best.places.push(g); continue; }
+      out.push({ p, places: [g] });
+    }
+    // 束ねた丸は、含まれる場所の真ん中に置く
+    for (const c of out) {
+      c.lat = c.places.reduce((a, g) => a + g.lat, 0) / c.places.length;
+      c.lng = c.places.reduce((a, g) => a + g.lng, 0) / c.places.length;
+    }
+    return out;
+  }
+
+  function placeMarker(g) {
+    const v = g.items[0];                 // 最新の記録を代表にする
+    const t = tagOf(v.tag);
+    const icon = L.divIcon({
+      className: 'pin',
+      html: '<span class="pin__mark">' + t.mark + '</span>'
+        + (g.items.length > 1 ? '<b class="pin__count">' + g.items.length + '</b>' : ''),
+      iconSize: [34, 34],
+      iconAnchor: [17, 34],
+      popupAnchor: [0, -30],
+    });
+    const m = L.marker([g.lat, g.lng], { icon });
+    m.bindPopup(buildPinPopup(g, t));
+    return m;
+  }
+
+  function clusterMarker(c) {
+    const n = c.places.length;
+    const big = n >= 100;
+    const size = big ? 46 : 38;
+    const icon = L.divIcon({
+      className: 'cpin' + (big ? ' cpin--big' : ''),
+      html: '<b>' + n + '</b>',
+      iconSize: [size, size],
+      iconAnchor: [size / 2, size / 2],
+    });
+    const m = L.marker([c.lat, c.lng], { icon, title: n + 'か所' });
+    // ★押したら必ずズームが進むようにする★
+    // 束の範囲にちょうど合わせる（fitBounds）だけだと、画面上の広がりが
+    // 前とほぼ同じになるので同じ束に組み直され、押しても何も起きないように見える。
+    // 同じ場所は50m以上離れているので、寄り続ければ必ずばらける。
+    m.on('click', () => {
+      const b = L.latLngBounds(c.places.map((g) => [g.lat, g.lng]));
+      const fit = state.map.getBoundsZoom(b, false, [40, 40]);
+      const next = Math.min(Math.max(fit, state.map.getZoom() + 2), state.map.getMaxZoom());
+      state.map.setView(b.getCenter(), next);
+    });
+    return m;
   }
 
   function buildLineDayChips(days) {
@@ -2362,6 +2585,7 @@
   function initBackGuard() {
     pushBackGuard();
     window.addEventListener('popstate', () => {
+      if (state.layersOpen) { openLayers(false); pushBackGuard(); return; }
       const sheet = $('#sheet');
       if (sheet && sheet.classList.contains('is-open')) {
         closeSheet(); pushBackGuard(); return;
@@ -2386,12 +2610,13 @@
   function switchTab(name) {
     $$('.tab').forEach((b) => b.classList.toggle('is-active', b.dataset.tab === name));
     $$('.panel').forEach((p) => p.classList.toggle('is-active', p.id === 'panel-' + name));
-    if (name === 'map' && state.map) setTimeout(() => state.map.invalidateSize(), 50);
+    if (name === 'map' && state.map) setTimeout(() => { fitMapHeight(); state.map.invalidateSize(); }, 50);
+    if (name !== 'map') openLayers(false);
     if (name === 'history') renderHistory(true);
     // 記録したあとに設定を開いたとき、バックアップの状況が古いままにならないように
     if (name === 'settings') {
       ensurePersistOnce().then(() => { renderPersistInfo(); renderDeviceInfo(); });
-      renderBackupStatus(); renderStorageInfo();
+      renderBackupStatus(); renderStorageInfo(); renderPickTags();
       prepareBackupFile(state.shareType);
     } else {
       releaseBackupFile();
@@ -2431,12 +2656,19 @@
     }
   }
 
-  async function saveBackupFile(file, counts) {
+  function saveFile(file) {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(file);
     a.download = file.name;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  // ★「バックアップを取った」と記録してよいのは全部を書き出したときだけ★
+  // 一部だけの書き出しでここを通すと、次の警告が出なくなり、
+  // 全部のバックアップを取ったつもりのまま機種変してしまう。
+  async function saveBackupFile(file, counts) {
+    saveFile(file);
     await Store.markBackedUp(counts);
     renderBackupStatus();
   }
@@ -2463,6 +2695,157 @@
     const name = `meguri-log-${todayLocal()}.json`;
     const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
     return { data, name, blob, counts: { visits: data.visits.length, photos: data.photos.length } };
+  }
+
+  // ---------------------------------------------------------------
+  // 選んで書き出す（人に渡す用）
+  // ---------------------------------------------------------------
+  // 上のバックアップとは別物。バックアップは全部でないと機種変で困るので、
+  // 「一部だけ渡す」はここに分けてある。
+  // ★入っていないことが既定★ 写真・メモ・金額は、自分で選んだときだけ入る。
+  // 渡してから気づいても取り返せないので、外し忘れではなく入れ忘れが起きる側に倒す。
+  function trimForShare(v, opt) {
+    const out = Object.assign({}, v);
+    if (!opt.memo) out.memo = '';
+    if (!opt.money) { delete out.amount; delete out.rating; delete out.revisit; }
+    // 写真を入れないときは参照も消す。残すと、渡した先で開けない写真の枠だけが出る
+    if (!opt.photo) out.photoIds = [];
+    return out;
+  }
+
+  async function buildPickExport() {
+    const tags = state.pickTags;
+    if (!tags.size) return null;
+    const opt = {
+      photo: $('#pick-photo').checked,
+      memo: $('#pick-memo').checked,
+      money: $('#pick-money').checked,
+    };
+    const data = await Store.exportAll({
+      visitFilter: (v) => tags.has(v.tag || ''),
+      withPhotos: opt.photo,
+    });
+    data.visits = data.visits.map((v) => trimForShare(v, opt));
+    // 読み込む側に「これは一部です」と分かるようにしておく。
+    // 全部のバックアップと取り違えられると、何が入っていないのか分からなくなる。
+    data.partial = true;
+    data.partialTags = Array.from(tags).map((k) => tagOf(k).label);
+    const label = data.partialTags.length === 1 ? data.partialTags[0] : '選んだ分';
+    const name = 'meguri-log-' + label.replace(/[^\p{L}\p{N}ー・]/gu, '') + '-' + todayLocal() + '.json';
+    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+    return { data, name, blob, counts: { visits: data.visits.length, photos: data.photos.length } };
+  }
+
+  // 設定を開くたびに作り直す。記録が増えてもタグの件数が古いままにならないように。
+  async function renderPickTags() {
+    const box = $('#pick-tags');
+    if (!box) return;
+    const all = await Store.getAllVisits();
+    const counts = new Map();
+    for (const v of all) {
+      const k = v.tag || '';
+      counts.set(k, (counts.get(k) || 0) + 1);
+    }
+    // 記録が無くなったタグの選択は落とす（選ばれたまま0件になると混乱する）
+    Array.from(state.pickTags).forEach((k) => { if (!counts.get(k)) state.pickTags.delete(k); });
+
+    box.innerHTML = '';
+    TAGS.forEach((t) => {
+      const n = counts.get(t.key) || 0;
+      if (!n) return;                        // 記録の無いタグは出さない
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'pktag' + (state.pickTags.has(t.key) ? ' is-on' : '');
+      b.innerHTML = t.mark + ' ' + escapeHtml(t.label) + ' <small>' + n + '</small>';
+      b.addEventListener('click', () => {
+        if (state.pickTags.has(t.key)) state.pickTags.delete(t.key);
+        else state.pickTags.add(t.key);
+        b.classList.toggle('is-on');
+        schedulePick();
+      });
+      box.appendChild(b);
+    });
+    if (!box.children.length) {
+      box.innerHTML = '<p class="muted">まだ記録がありません。</p>';
+    }
+    schedulePick();
+  }
+
+  // 選び直すたびにファイルを作り直しておく。
+  // ★共有は押された直後にしか通らない★ ので、押されてから作るのでは間に合わない。
+  function schedulePick() {
+    clearTimeout(state.pickTimer);
+    state.pickSeq++;
+    state.pickFile = null;
+    const ex = $('#btn-pick-export');
+    const sh = $('#btn-pick-share');
+    if (ex) ex.disabled = true;
+    if (sh) sh.disabled = true;
+    const cnt = $('#pick-count');
+    if (cnt) {
+      const none = !state.pickTags.size;
+      cnt.textContent = none ? 'タグを選んでください。' : '数えています…';
+      cnt.classList.toggle('is-none', none);
+    }
+    if (!state.pickTags.size) return;
+    state.pickTimer = setTimeout(refreshPickFile, 250);
+  }
+
+  async function refreshPickFile() {
+    const seq = state.pickSeq;
+    let b = null;
+    try { b = await buildPickExport(); } catch (e) { b = null; }
+    if (seq !== state.pickSeq) return;       // 作っている間に選び直された
+    state.pickFile = b;
+    const cnt = $('#pick-count');
+    const ex = $('#btn-pick-export');
+    const sh = $('#btn-pick-share');
+    const ok = !!(b && b.counts.visits);
+    if (ex) ex.disabled = !ok;
+    if (sh) sh.disabled = !ok;
+    if (!cnt) return;
+    if (!ok) {
+      cnt.textContent = '選んだタグの記録がありません。';
+      cnt.classList.add('is-none');
+      return;
+    }
+    const ph = b.counts.photos ? '・写真 ' + b.counts.photos + '枚' : '';
+    cnt.textContent = b.data.partialTags.join('・') + ' の記録 ' + b.counts.visits + '件' + ph + ' を書き出します。';
+    cnt.classList.remove('is-none');
+  }
+
+  function initPickExport() {
+    const ex = $('#btn-pick-export');
+    const sh = $('#btn-pick-share');
+    if (!ex) return;
+    ['#pick-photo', '#pick-memo', '#pick-money'].forEach((sel) => {
+      const el = $(sel);
+      if (el) el.addEventListener('change', schedulePick);
+    });
+
+    ex.addEventListener('click', () => {
+      const ready = state.pickFile;
+      if (!ready) { toast('準備中です。少し待ってからもう一度押してください'); return; }
+      // ここではバックアップを取った扱いにしない（一部しか入っていないため）
+      saveFile(new File([ready.blob], ready.name, { type: 'application/json' }));
+      toast(ready.counts.visits + '件を書き出しました（バックアップとは別です）');
+    });
+
+    if (sh && state.shareType) sh.hidden = false;
+    if (sh) sh.addEventListener('click', () => {
+      const ready = state.pickFile;
+      const st = state.shareType;
+      if (!ready || !st) { toast('準備中です。少し待ってからもう一度押してください'); return; }
+      // await を挟まずに share() へ入る。挟むと権限が切れてAndroidで必ず失敗する
+      const file = new File([ready.blob], ready.name.replace(/\.json$/, '.' + st.ext), { type: st.type });
+      navigator.share({ files: [file], title: 'めぐログ（' + ready.data.partialTags.join('・') + '）' })
+        .then(() => toast('送信先を選んでください'))
+        .catch((err) => {
+          if (err && err.name === 'AbortError') return;
+          saveFile(file);
+          toast('共有できなかったので、ファイルとして保存しました');
+        });
+    });
   }
 
   function initSettings() {
@@ -2520,6 +2903,8 @@
       saveBackupFile(new File([b.blob], b.name, { type: 'application/json' }), b.counts);
     });
 
+    initPickExport();
+
     $('#btn-import').addEventListener('click', () => $('#import-file').click());
 
     $('#import-file').addEventListener('change', async (e) => {
@@ -2535,8 +2920,20 @@
         const inPhoto = (data.photos || []).length;
         const now = (await Store.getAllVisits()).length;
         const when = data.exportedAt ? data.exportedAt.slice(0, 10) : '不明';
+        // 一部だけの書き出しは、全部のバックアップと見分けがつかないと事故になる。
+        // 何のタグだけが入っているのかを先に出す。
+        const note = data.partial
+          ? `【一部だけの書き出しです】
+`
+            + `　入っているタグ: ${(data.partialTags || []).join('・') || '不明'}
+`
+            + `　これ1つでは元に戻せません。
+
+`
+          : '';
         const ok = confirm(
-          `読み込む内容
+          note
+          + `読み込む内容
 `
           + `　記録 ${inFile}件・写真 ${inPhoto}枚（${when} に書き出したファイル）
 

@@ -5,7 +5,7 @@
    index.html / css / js / data を変更したら、必ず VERSION を上げること。
    上げないと、既に開いたことのある端末は古いキャッシュを返し続け、
    修正がいつまでも届かない（Service Workerは sw.js 自体が変わったときだけ再インストールされる）。 */
-const VERSION = 'v31';
+const VERSION = 'v32';
 const SHELL = 'meguri-shell-' + VERSION;
 const TILES = 'meguri-tiles-' + VERSION;
 const TILE_LIMIT = 400;
@@ -45,7 +45,10 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(req.url);
 
   // 地図タイル: あればキャッシュを返しつつ裏で更新（stale-while-revalidate）
-  if (url.hostname.endsWith('tile.openstreetmap.org')) {
+  // 地図の種類を選べるようにしたので、地理院（淡色・航空写真）もここに含める。
+  // 含め忘れると、選んだ種類のときだけ圏外で地図が真っ白になる。
+  if (url.hostname.endsWith('tile.openstreetmap.org') ||
+      url.hostname === 'cyberjapandata.gsi.go.jp') {
     e.respondWith(
       caches.open(TILES).then(async (cache) => {
         const hit = await cache.match(req);

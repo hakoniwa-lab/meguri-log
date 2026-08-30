@@ -10,6 +10,11 @@
   --danger:#c0392b;
 }
 *{box-sizing:border-box}
+/* ★hidden を最優先で効かせる★
+   .mkinds{display:flex} のように display を持つクラスは、ブラウザ既定の
+   [hidden]{display:none} に勝ってしまう。そのため hidden を付けても消えず、
+   ランドマークがオフのままチップの行が出続けて、地図の高さを45px奪っていた。 */
+[hidden]{display:none !important}
 html,body{margin:0;padding:0}
 body{
   font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","Noto Sans JP","Yu Gothic",Meiryo,sans-serif;
@@ -43,7 +48,10 @@ a{color:var(--navy)}
 
 /* ---- 地図 ---- */
 #panel-map{position:relative}
-#map{height:calc(100vh - 230px); min-height:320px; background:#e8eef5}
+/* 高さは js の fitMapHeight が実測して上書きする。ここの値は、
+   万一 js が動かなかったときのための控え。min-height は inline の height にも
+   勝つので、js 側は「下限」としてこの値を読んでいる（数字を二重に書かない）。 */
+#map{height:calc(100vh - 230px); min-height:300px; background:#e8eef5}
 /* 地図の枠を基準にする。パネル基準だと、下の説明文の行数でボタン位置がずれる */
 .mapwrap{position:relative}
 /* bottom は地図の帰属表示（約17px）を避けられる高さにする */
@@ -297,8 +305,50 @@ a{color:var(--navy)}
   border-left:5px solid transparent; border-right:5px solid transparent;
   border-top:7px solid var(--navy);
 }
-.fab--icon{padding:10px 14px; font-size:17px}
-.fab--sub.is-off{opacity:.45}
+/* ---- 表示パネル（地図に出すもの／地図の種類） ---- */
+/* ボタンを地図の上に並べ続けると右端が埋まるので、押したときだけ開く1枚にまとめた */
+/* 右下ではなく左下に出す。右下に重ねると、開いている間だけ
+   「ここを記録」が押せなくなり、押しても無反応に見える。 */
+.layers{
+  position:absolute; left:14px; bottom:26px; z-index:600;
+  width:min(232px, calc(100% - 130px)); max-height:calc(100% - 52px); overflow-y:auto;
+  background:#fff; border-radius:14px; padding:8px;
+  box-shadow:0 8px 28px rgba(20,30,50,.28); border:1px solid var(--line);
+}
+.layers__h{margin:4px 6px 6px; font-size:11.5px; font-weight:700; color:var(--muted)}
+.layers__h+.layers__h, .layers__row+.layers__h{margin-top:10px}
+.layers__row{
+  appearance:none; width:100%; border:0; background:none; font:inherit; font-size:13.5px;
+  font-weight:700; color:var(--navy); text-align:left; cursor:pointer;
+  display:flex; align-items:center; gap:8px; padding:9px 8px; border-radius:9px;
+}
+.layers__row:active{background:var(--bg)}
+.layers__row>span{font-size:16px; width:20px; text-align:center; flex:0 0 auto}
+.layers__row>small{margin-left:auto; font-size:10.5px; font-weight:400; color:var(--muted)}
+/* チェックは行の右端。文字だけだと「今どっちなのか」が読み取れない */
+.layers__row::after{
+  content:'✓'; margin-left:auto; font-size:14px; color:var(--navy); flex:0 0 auto;
+}
+.layers__row.is-off{color:var(--muted)}
+.layers__row.is-off::after{content:''; width:14px; height:14px; border:1.5px solid var(--line); border-radius:4px}
+.layers__styles{display:flex; gap:6px; padding:0 4px 4px}
+.mstyle{
+  flex:1 1 0; appearance:none; border:1.5px solid var(--line); border-radius:9px;
+  padding:8px 4px; background:#fff; color:var(--muted);
+  font:inherit; font-size:12px; font-weight:700; cursor:pointer;
+}
+.mstyle.is-on{border-color:var(--navy); background:var(--navy); color:#fff}
+
+/* ---- まとめたピン ---- */
+/* 近いピンは丸1つにまとめる。全国表示だと数百のピンが重なって数が読めない */
+.cpin{background:none; border:0}
+.cpin>b{
+  display:flex; align-items:center; justify-content:center;
+  width:38px; height:38px; border-radius:50%;
+  background:var(--navy); color:#fff; font-size:13px; font-weight:700;
+  border:2.5px solid #fff; box-shadow:0 2px 8px rgba(0,0,0,.3);
+}
+.cpin--big>b{width:46px; height:46px; font-size:14px}
 
 
 /* ---- 一覧の折りたたみ ---- */
@@ -509,3 +559,18 @@ a{color:var(--navy)}
   box-shadow:0 3px 12px rgba(20,30,50,.18);
 }
 .searcharea:disabled{opacity:.6; cursor:default}
+
+/* ---- 選んで書き出す ---- */
+.picktags{display:flex; flex-wrap:wrap; gap:6px; margin:10px 0}
+.pktag{
+  appearance:none; border:1.5px solid var(--line); border-radius:99px;
+  padding:6px 11px; background:#fff; color:var(--muted);
+  font:inherit; font-size:12.5px; font-weight:700; cursor:pointer;
+  display:inline-flex; align-items:center; gap:5px; line-height:1;
+}
+.pktag.is-on{border-color:var(--navy); background:var(--navy); color:#fff}
+.pktag small{font-weight:400; opacity:.85}
+.pickopts{display:flex; flex-wrap:wrap; gap:10px 16px; margin:10px 0 8px}
+.pickopts label{display:inline-flex; align-items:center; gap:6px; font-size:13px; cursor:pointer}
+.pickcount{margin:0 0 10px; font-size:13px; font-weight:700; color:var(--navy)}
+.pickcount.is-none{color:var(--muted); font-weight:400}

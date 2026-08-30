@@ -156,14 +156,29 @@ const Store = (() => {
     // ---- 書き出し / 読み込み ----
     // 写真はBase64にしてJSONに同梱する。1ファイルで完結させ、
     // バックアップの取り違えが起きないようにする。
-    async exportAll() {
-      const [visits, spots] = await Promise.all([this.getAllVisits(), this.getSpots()]);
+    //
+    // visitFilter … 書き出す記録を選ぶ（人に渡すときにタグで絞るため）。
+    //               null なら全部＝バックアップ。
+    // withPhotos  … false なら写真の中身を入れない。渡す相手に写真まで
+    //               持たせたくない場面があるため（既定は入れる＝バックアップ）。
+    async exportAll({ visitFilter = null, withPhotos = true } = {}) {
+      const [all, allSpots] = await Promise.all([this.getAllVisits(), this.getSpots()]);
+      const visits = visitFilter ? all.filter(visitFilter) : all;
       const photos = [];
-      for (const v of visits) {
-        for (const pid of (v.photoIds || [])) {
-          const p = await this.getPhoto(pid);
-          if (p) photos.push({ id: p.id, type: p.type, data: await blobToBase64(p.blob) });
+      if (withPhotos) {
+        for (const v of visits) {
+          for (const pid of (v.photoIds || [])) {
+            const p = await this.getPhoto(pid);
+            if (p) photos.push({ id: p.id, type: p.type, data: await blobToBase64(p.blob) });
+          }
         }
+      }
+      // 自分で追加した地点は、書き出す記録が指しているものだけに絞る。
+      // 絞らないと「仕事のぶんだけ」と言いながら全部の地点名が付いてくる。
+      let spots = allSpots;
+      if (visitFilter) {
+        const need = new Set(visits.map((v) => v.spotId));
+        spots = allSpots.filter((sp) => need.has(sp.id));
       }
       return {
         app: 'meguri-log',
