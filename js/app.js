@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v46';
+  const APP_VERSION = 'v47';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -148,6 +148,10 @@
     colLayer: null,          // 地図に出しているリストのレイヤー
     lines: null,        // 移動の線のレイヤー
     linesOn: true,
+    // 通った道そのもの。[緯度, 経度, 時刻] の並び
+    track: [],
+    trackLineOn: true,
+    trackLayer: null,
     lineDay: null,      // 表示する日（nullは全部）。既定は最新の日
     lineDayPicked: false,  // ユーザーが自分で日を選んだか
     shareType: null,       // この端末の共有シートが受け付ける形式
@@ -291,6 +295,18 @@
       recordAtPoint(e.latlng.lat, e.latlng.lng);
     });
 
+    const tl = $('#btn-track-line');
+    if (tl) {
+      setToggle('#btn-track-line', state.trackLineOn);
+      tl.addEventListener('click', async () => {
+        state.trackLineOn = !state.trackLineOn;
+        setToggle('#btn-track-line', state.trackLineOn);
+        await Store.setMeta('trackLineOn', state.trackLineOn);
+        drawTrack();
+        if (state.trackLineOn && !state.track.length) toast('通った道はまだ記録されていません');
+      });
+    }
+
     $('#btn-lines').addEventListener('click', () => {
       state.linesOn = !state.linesOn;
       setToggle('#btn-lines', state.linesOn);
@@ -329,6 +345,8 @@
     initMapSearch();
     $('#btn-here').addEventListener('click', () => locate(false));
     $('#btn-here-record').addEventListener('click', () => locate(true));
+    // 前に記録した軌跡を、開いた時点で出す（refreshMap を待たない）
+    drawTrack();
   }
 
   // 表示の切り替え。オン・オフの見た目を1か所で決める（行ごとに書くとズレる）
@@ -493,6 +511,7 @@
     if (state.layer) state.layer.setStyle(styleFor);
     renderPins();
     renderDayLines();
+    drawTrack();
   }
 
   // 移動の線。同じ日に記録した地点を、記録した順に結ぶ。
@@ -2995,14 +3014,71 @@
   // 精度は要らない（市区町村が分かればよい）。enableHighAccuracy を false にすると
   // GPSを回しっぱなしにせず基地局・Wi-Fiで済ませられるので、電池の持ちが全く違う。
   const TRACK_OPTS = { enableHighAccuracy: false, maximumAge: 15000, timeout: 30000 };
-  // 前回から動いていないときに何度も判定しない距離
+  // 前回から動いていないときに何度も判定しない距離（市区町村の塗り分け用）
   const TRACK_MIN_MOVE = 150;
+
+  // ★通った道を線で残す★
+  // 市区町村を塗るだけでは「どこを通ったか」が分からない、という声から足したもの。
+  // 地図の道路に色を付けているのではなく、★自分が通った点を順につないでいる★だけ。
+  // それでも40mおきに拾えば、縮尺を上げたとき道なりの形になる。
+  // （道路そのものに吸着させるには外部の経路照合サービスが要るので使っていない）
+  const TRACK_LINE_MIN = 40;                 // これだけ動いたら点を1つ足す
+  const TRACK_GAP_MS = 5 * 60 * 1000;        // これ以上間が空いたら線を切る
+  const TRACK_GAP_M = 3000;                  // 距離が飛んでいても切る（閉じていた間）
+  const TRACK_MAX_PTS = 30000;               // 貯めすぎない（古い方から捨てる）
+  let trackSaveTimer = null;
 
   async function loadPassed() {
     const saved = (await Store.getMeta('passed')) || [];
     state.passed = new Set(saved);
     state.passedCounts = !!(await Store.getMeta('passedCounts'));
+    const tr = await Store.getMeta('track');
+    state.track = Array.isArray(tr) ? tr : [];
+    const on = await Store.getMeta('trackLineOn');
+    state.trackLineOn = (on === null || on === undefined) ? true : !!on;
     rebuildPassedPref();
+  }
+
+  // 動くたびに保存すると走っている間ずっと書き続けることになる。少し待ってまとめて書く。
+  function saveTrackSoon() {
+    if (trackSaveTimer) return;
+    trackSaveTimer = setTimeout(async () => {
+      trackSaveTimer = null;
+      try { await Store.setMeta('track', state.track); } catch (e) { /* 端末が一杯 */ }
+    }, 8000);
+  }
+
+  // 線を切るところで区切る。アプリを閉じていた間を1本の直線でつながないため。
+  function trackSegments() {
+    const segs = [];
+    let cur = [];
+    for (const p of state.track) {
+      if (cur.length) {
+        const q = cur[cur.length - 1];
+        if ((p[2] - q[2]) > TRACK_GAP_MS || distMeters(q[0], q[1], p[0], p[1]) > TRACK_GAP_M) {
+          segs.push(cur); cur = [];
+        }
+      }
+      cur.push(p);
+    }
+    if (cur.length) segs.push(cur);
+    return segs.filter((sg) => sg.length >= 2);
+  }
+
+  function drawTrack() {
+    if (!state.map) return;
+    if (state.trackLayer) { state.map.removeLayer(state.trackLayer); state.trackLayer = null; }
+    if (!state.trackLineOn || state.track.length < 2) return;
+    const g = L.layerGroup();
+    for (const sg of trackSegments()) {
+      const pts = sg.map((p) => [p[0], p[1]]);
+      // 白を下に敷く。濃い地図でも薄い地図でも線が見えるように
+      L.polyline(pts, { color: '#fff', weight: 7, opacity: .7,
+                        lineCap: 'round', lineJoin: 'round' }).addTo(g);
+      L.polyline(pts, { color: '#e8672d', weight: 3.5, opacity: .95,
+                        lineCap: 'round', lineJoin: 'round' }).addTo(g);
+    }
+    state.trackLayer = g.addTo(state.map);
   }
 
   // 市区町村の通過から、都道府県の通過を作る（記録と同じ考え方）
@@ -3040,6 +3116,9 @@
     document.removeEventListener('visibilitychange', onTrackVisibility);
     if (state.wakeLock) { try { await state.wakeLock.release(); } catch (e) { /* もう外れている */ } }
     state.wakeLock = null;
+    // まとめ書きを待たずに、止めた時点の分を必ず残す
+    if (trackSaveTimer) { clearTimeout(trackSaveTimer); trackSaveTimer = null; }
+    try { await Store.setMeta('track', state.track); } catch (e) { /* 端末が一杯 */ }
     setToggle('#btn-track', false);
     renderTrackBar();
     toast('移動の記録を止めました');
@@ -3057,7 +3136,19 @@
   async function onTrackPos(pos) {
     if (!state.tracking) return;
     const lat = pos.coords.latitude, lng = pos.coords.longitude;
-    // 同じ場所に留まっている間は判定しない
+    // ★線は市区町村の判定より細かく拾う★
+    // 150mおきだと曲がり角が全部切り落とされて、道の形にならない。
+    const tail = state.track.length ? state.track[state.track.length - 1] : null;
+    if (!tail || distMeters(tail[0], tail[1], lat, lng) >= TRACK_LINE_MIN) {
+      state.track.push([Math.round(lat * 1e6) / 1e6, Math.round(lng * 1e6) / 1e6, Date.now()]);
+      if (state.track.length > TRACK_MAX_PTS) {
+        state.track.splice(0, state.track.length - TRACK_MAX_PTS);
+      }
+      saveTrackSoon();
+      drawTrack();
+    }
+
+    // 同じ場所に留まっている間は市区町村の判定をしない
     if (state.lastTrack && distMeters(state.lastTrack.lat, state.lastTrack.lng, lat, lng) < TRACK_MIN_MOVE) return;
     state.lastTrack = { lat: lat, lng: lng };
 
@@ -3121,11 +3212,14 @@
     }
     const clr = $('#btn-track-clear');
     if (clr) clr.addEventListener('click', async () => {
-      if (!state.passed.size) { toast('通った記録はまだありません'); return; }
-      if (!confirm('通った印を全部消しますか？\n記録そのものは消えません。')) return;
+      if (!state.passed.size && !state.track.length) { toast('通った記録はまだありません'); return; }
+      if (!confirm('通った印と、通った道の線を全部消しますか？\n記録（ピン）そのものは消えません。')) return;
       state.passed = new Set();
+      state.track = [];
       rebuildPassedPref();
       await Store.setMeta('passed', []);
+      await Store.setMeta('track', []);
+      drawTrack();
       await refreshVisited();
       refreshMap(); renderProgress(); renderList();
       toast('消しました');
@@ -3160,6 +3254,9 @@
     { id: 'awa34',      file: './data/collections/awa34.json' },
     { id: 'asakusa9',   file: './data/collections/asakusa9.json' },
     { id: 'sakura7',    file: './data/collections/sakura7.json' },
+    { id: 'hama7',      file: './data/collections/hama7.json' },
+    { id: 'yakushi91',  file: './data/collections/yakushi91.json' },
+    { id: 'jizo108',    file: './data/collections/jizo108.json' },
     { id: 'sankei',     file: './data/collections/sankei.json' },
     { id: 'sanmeien',   file: './data/collections/sanmeien.json' },
   ];
@@ -3206,6 +3303,14 @@
     for (const v of visits) {
       const vn = nameKey(v.place && v.place.name);
       const same = !!(nm && vn && nm === vn);
+      // ★位置が市区町村の中心までしか分かっていないものは、距離で数えない★
+      // 本の目次には番地が無く、地図にも載っていない小さな寺がある。
+      // その分は市役所のあたりに落ちている。近くを通っただけで札所に行ったことに
+      // なってしまうので、名前が一致したときだけ数える。
+      if (item.approx) {
+        if (same) return 'auto';
+        continue;
+      }
       if (v.coords && typeof v.coords.lat === 'number') {
         // ★名前は「距離をどこまで許すか」にだけ使う★
         // 以前は「片方の名前がもう片方に含まれていれば同じ場所」としていたが、
@@ -3379,11 +3484,16 @@
       const no = r.it.no ? '<b class="citem__no">' + r.it.no + '</b>' : '';
       // 旧国名があれば添える。一の宮は「どの国の一宮か」がそのまま意味になる
       const kuni = r.it.kuni ? '<i class="citem__kuni">' + escapeHtml(r.it.kuni) + '</i>' : '';
-      jump.innerHTML = no + escapeHtml(r.it.name) + kuni
+      // 位置が市区町村の中心までしか分かっていないものは、そう言っておく。
+      // 黙って地図に置くと「その場所にある」と読まれてしまう。
+      const rough = r.it.approx ? '<i class="citem__rough" title="番地が資料に無く、'
+        + '地図にも載っていないため、市区町村の中心に置いています">およその位置</i>' : '';
+      jump.innerHTML = no + escapeHtml(r.it.name) + kuni + rough
         + (r.it.mine ? '<i class="citem__mine">自分で追加</i>' : '');
       jump.addEventListener('click', () => {
         switchTab('map');
-        setTimeout(() => state.map.setView([r.it.lat, r.it.lng], 16), 80);
+        // おおよその位置なら寄りすぎない。近づくほど「ここにある」と見えてしまう
+        setTimeout(() => state.map.setView([r.it.lat, r.it.lng], r.it.approx ? 13 : 16), 80);
       });
       row.appendChild(jump);
 

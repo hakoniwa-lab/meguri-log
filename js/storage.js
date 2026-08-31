@@ -196,7 +196,8 @@ const Store = (() => {
 
     // 持ち出す覚え書き。lastBackup はその端末の事情なので持ち出さない。
     async exportMeta() {
-      const keys = ['passed', 'passedCounts', 'collectDone', 'collectExtra',
+      const keys = ['passed', 'passedCounts', 'track', 'trackLineOn',
+                    'collectDone', 'collectExtra',
                     'collections', 'hiddenTags', 'mapStyle'];
       const out = {};
       for (const k of keys) {
