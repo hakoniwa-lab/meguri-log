@@ -5,7 +5,7 @@
    index.html / css / js / data を変更したら、必ず VERSION を上げること。
    上げないと、既に開いたことのある端末は古いキャッシュを返し続け、
    修正がいつまでも届かない（Service Workerは sw.js 自体が変わったときだけ再インストールされる）。 */
-const VERSION = 'v47';
+const VERSION = 'v48';
 const SHELL = 'meguri-shell-' + VERSION;
 const TILES = 'meguri-tiles-' + VERSION;
 const TILE_LIMIT = 400;
@@ -33,6 +33,7 @@ const COLLECTION_FILES = [
   'hyakumeizan', 'lighthouse50', 'ichinomiya', 'sankei', 'sanmeien',
   'bosou41', 'nanohana18', 'awa34', 'asakusa9', 'sakura7',
   'hama7', 'yakushi91', 'jizo108',
+  'fudo36', 'hanatera102', 'nisshu22',
 ].map((id) => './data/collections/' + id + '.json');
 
 self.addEventListener('install', (e) => {
