@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v43';
+  const APP_VERSION = 'v45';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -3154,6 +3154,12 @@
     { id: 'taki100',    file: './data/collections/taki100.json' },
     { id: 'hyakumeizan', file: './data/collections/hyakumeizan.json' },
     { id: 'lighthouse50', file: './data/collections/lighthouse50.json' },
+    { id: 'ichinomiya', file: './data/collections/ichinomiya.json' },
+    { id: 'bosou41',    file: './data/collections/bosou41.json' },
+    { id: 'nanohana18', file: './data/collections/nanohana18.json' },
+    { id: 'awa34',      file: './data/collections/awa34.json' },
+    { id: 'asakusa9',   file: './data/collections/asakusa9.json' },
+    { id: 'sakura7',    file: './data/collections/sakura7.json' },
     { id: 'sankei',     file: './data/collections/sankei.json' },
     { id: 'sanmeien',   file: './data/collections/sanmeien.json' },
   ];
@@ -3371,7 +3377,9 @@
       jump.type = 'button';
       jump.className = 'citem__go';
       const no = r.it.no ? '<b class="citem__no">' + r.it.no + '</b>' : '';
-      jump.innerHTML = no + escapeHtml(r.it.name)
+      // 旧国名があれば添える。一の宮は「どの国の一宮か」がそのまま意味になる
+      const kuni = r.it.kuni ? '<i class="citem__kuni">' + escapeHtml(r.it.kuni) + '</i>' : '';
+      jump.innerHTML = no + escapeHtml(r.it.name) + kuni
         + (r.it.mine ? '<i class="citem__mine">自分で追加</i>' : '');
       jump.addEventListener('click', () => {
         switchTab('map');
