@@ -146,6 +146,25 @@
       </div>
     </div>
 
+    <!-- 駅は9,153あるので1本のリストにしない。県別・路線別に切ってから開く。
+         ここで選んだものを、下の「集めるリスト」の画面にそのまま流し込む。 -->
+    <div id="collect-stations" hidden>
+      <div class="cdet__head">
+        <button id="btn-st-back" class="linkbtn">← 一覧へ</button>
+      </div>
+      <h2 class="cdet__title">🚉 鉄道駅</h2>
+      <p class="muted" id="st-note"></p>
+      <div class="stseg" id="st-seg">
+        <button type="button" class="stseg__b is-on" data-mode="pref">県別</button>
+        <button type="button" class="stseg__b" data-mode="line">路線別</button>
+        <button type="button" class="stseg__b" data-mode="gone">廃駅</button>
+      </div>
+      <div class="filter">
+        <input type="search" id="st-filter" placeholder="県名・路線名で絞り込む">
+      </div>
+      <div id="st-list" class="list"></div>
+    </div>
+
     <div id="collect-detail" hidden>
       <div class="cdet__head">
         <button id="btn-collect-back" class="linkbtn">← 一覧へ</button>

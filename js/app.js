@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v48';
+  const APP_VERSION = 'v49';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -152,6 +152,10 @@
     track: [],
     trackLineOn: true,
     trackLayer: null,
+    // 駅。索引と、読み込んだ県のぶんだけ持つ（47県ぶんを常に抱えない）
+    stIndex: null,
+    stPref: {},
+    stMode: 'pref',
     lineDay: null,      // 表示する日（nullは全部）。既定は最新の日
     lineDayPicked: false,  // ユーザーが自分で日を選んだか
     shareType: null,       // この端末の共有シートが受け付ける形式
@@ -215,6 +219,7 @@
     initHistory();
     initSettings();
     initCollect();
+    initStations();
     initTracking();
     renderList();
     renderProgress();
@@ -3301,7 +3306,10 @@
   // 名前の比べ方。空白と括弧だけ落として、あとはそのまま比べる。
   const nameKey = (s) => String(s || '').replace(/[\s　（）()「」『』]/g, '');
 
-  function visitedItem(item, visits, hand) {
+  function visitedItem(item, visits, hand, reach) {
+    // リストごとに許容する距離を変えられる。駅は密度が高いので狭くする。
+    const near = (reach && reach.near) || COLLECT_NEAR;
+    const nearNamed = (reach && reach.nearNamed) || COLLECT_NEAR_NAMED;
     const nm = nameKey(item.name);
     for (const v of visits) {
       const vn = nameKey(v.place && v.place.name);
@@ -3321,7 +3329,7 @@
         // チェックが付いた。3.9km離れた別の城で、本人の指摘で発覚した。
         // 「〜城」「〜寺」は前に字が付くだけで別の場所になるので、部分一致は使わない。
         const d = distMeters(v.coords.lat, v.coords.lng, item.lat, item.lng);
-        if (d <= (same ? COLLECT_NEAR_NAMED : COLLECT_NEAR)) return 'auto';
+        if (d <= (same ? nearNamed : near)) return 'auto';
       } else if (same) {
         // 座標の無い記録（市区町村をタップしただけ等）は名前だけで見るしかない
         return 'auto';
@@ -3348,7 +3356,7 @@
   function collectStats(col, visits, hand, extra) {
     const items = itemsOf(col, extra);
     let n = 0;
-    for (const it of items) if (visitedItem(it, visits, (hand || {})[col.id])) n++;
+    for (const it of items) if (visitedItem(it, visits, (hand || {})[col.id], col.reach)) n++;
     return { done: n, total: items.length };
   }
 
@@ -3357,6 +3365,230 @@
       Store.getMeta('collectDone'), Store.getMeta('collectExtra'),
     ]);
     return { hand: hand || {}, extra: extra || {} };
+  }
+
+  // ---------------------------------------------------------------
+  // 鉄道駅・廃駅
+  // ---------------------------------------------------------------
+  // ★1本のリストにしない★
+  // 全国9,153駅に対して制覇率を出しても、ほとんどの人が0%台で意味を持たない。
+  // 「この県は制覇した」「この路線は乗った」で見られるよう、県別・路線別に切る。
+  // ゲームにもしない（駅メモ・駅奪取があり、そこと張り合っても仕方がない）。
+  //
+  // 出典は Wikidata（CC0）。★OpenStreetMap は廃駅が106件しか無く使えない★
+  // 都道府県はどの出典にも入っていないので、同梱の境界データから点in多角形で決めてある。
+  const ST_INDEX = './data/stations/index.json';
+  const stFile = (c) => './data/stations/p' + String(c).padStart(2, '0') + '.json';
+
+  // ★駅は密度が高い★ 実測で18.6%の駅は400m以内に別の駅がある。
+  // 既定の400mのままだと、1つ記録しただけで隣の駅にもチェックが入る。
+  // 名前が一致したときの許容も、同名駅（日野・富田・本町…）が全国にあるので狭くする。
+  const ST_REACH = { near: 150, nearNamed: 1000 };
+
+  async function loadStationIndex() {
+    if (!state.stIndex) state.stIndex = await fetch(ST_INDEX).then((r) => r.json());
+    return state.stIndex;
+  }
+
+  async function loadStationPref(code) {
+    if (!state.stPref[code]) {
+      state.stPref[code] = await fetch(stFile(code)).then((r) => r.json());
+    }
+    return state.stPref[code];
+  }
+
+  // ★47県ぶん(900KB)を数のためだけに読まない★
+  // 記録が1つも無い県は必ず0か所なので、読まなくても数は分かる。
+  //
+  // ★state.visited.pref だけを見てはいけない★
+  // あれは「区域をタップして記録した」分しか入っていない。駅のように
+  // 地点で記録したものは spotId を持たないので、いつまでも0県のままになる。
+  // 記録の座標から県を引き直す。
+  async function loadVisitedPrefStations() {
+    const codes = new Set();
+    for (const id of state.visited.pref) {
+      const n = parseInt(String(id).replace(/^pref-/, ''), 10);
+      if (n) codes.add(n);
+    }
+    const visits = await Store.getAllVisits();
+    for (const v of visits) {
+      if (!(v.coords && typeof v.coords.lat === 'number')) continue;
+      const f = findAt('pref', v.coords.lat, v.coords.lng);
+      if (f && f.properties && f.properties.code) codes.add(parseInt(f.properties.code, 10));
+    }
+    await Promise.all(Array.from(codes).map((c) => loadStationPref(c).catch(() => null)));
+  }
+
+  const stItems = (code, gone) =>
+    ((state.stPref[code] || {}).items || []).filter((x) => (gone ? !!x.gone : !x.gone));
+
+  function prefName(code) {
+    const p = ((state.stIndex || {}).prefs || []).find((x) => x.code === code);
+    return p ? p.name : String(code);
+  }
+
+  // 選んだ県・路線を、いつもの「集めるリスト」の形に組み立てる。
+  // こうすると詳細画面（絞り込み・まだの分だけ・地図に出す・手でチェック）が
+  // そのまま使える。手で付けた印は id で覚えるので、★id は変えないこと★
+  function stationCol(mode, key) {
+    const idx = state.stIndex;
+    if (!idx) return null;
+    if (mode === 'line') {
+      const ln = idx.lines.find((l) => l.id === key);
+      if (!ln) return null;
+      const items = [];
+      for (const p of ln.prefs) {
+        for (const it of stItems(p, false)) {
+          if (it.lines.indexOf(key) >= 0) items.push(it);
+        }
+      }
+      return {
+        id: 'st-l' + key, name: ln.name, mark: '🚃', builtin: true, station: true,
+        reach: ST_REACH, items: items,
+        // ★路線の分け方は運転系統と違うことがある★
+        // 出典の「接続路線」は正式な路線名で入っていることが多く、
+        // 山手線の駅の多くは東北本線・東海道本線として登録されている。
+        // 黙っていると「17駅しかない」と誤解されるので、そう書いておく。
+        note: ln.prefs.map(prefName).join('・') + 'を通る' + ln.live + '駅'
+          + (ln.gone ? '（ほかに廃駅' + ln.gone + '）' : '') + '。'
+          + '路線の分け方は出典（Wikidata）のもので、正式な路線名で入っているため、'
+          + '普段乗っている運転系統とは駅の数が違うことがあります。',
+      };
+    }
+    const gone = mode === 'gone';
+    const p = idx.prefs.find((x) => x.code === key);
+    if (!p) return null;
+    return {
+      id: (gone ? 'st-g' : 'st-p') + key, mark: gone ? '🚏' : '🚉',
+      name: p.name + (gone ? 'の廃駅' : 'の駅'), builtin: true, station: true,
+      reach: ST_REACH, items: stItems(key, gone),
+      note: gone
+        ? '廃止された駅。跡地に行った記録があればチェックが入ります。'
+          + '出典に載っているのはウィキペディアに記事がある分なので、これで全部ではありません。'
+        : p.live + '駅。廃駅' + p.gone + 'は「廃駅」から見られます。',
+    };
+  }
+
+  async function openStations() {
+    $('#collect-home').hidden = true;
+    $('#collect-stations').hidden = false;
+    $('#st-note').textContent = '読み込んでいます…';
+    await loadStationIndex();
+    await loadVisitedPrefStations();
+    const i = state.stIndex;
+    const live = i.prefs.reduce((a, p) => a + p.live, 0);
+    const gone = i.prefs.reduce((a, p) => a + p.gone, 0);
+    // ★全国の制覇率は出さない★ 9,000駅に対して0.5%では意味を持たない
+    $('#st-note').textContent =
+      '現役 ' + live + '駅・廃駅 ' + gone + '駅・' + i.lines.length + '路線。'
+      + '県か路線を選ぶと、その中での達成が出ます。出典は Wikidata。';
+    renderStationChooser();
+  }
+
+  function closeStations() {
+    $('#collect-stations').hidden = true;
+    $('#collect-home').hidden = false;
+    renderCollect();
+  }
+
+  async function renderStationChooser() {
+    const box = $('#st-list');
+    if (!box || !state.stIndex) return;
+    const q = (($('#st-filter') || {}).value || '').trim().toLowerCase();
+    const mode = state.stMode;
+    const [visits, meta] = await Promise.all([Store.getAllVisits(), collectMeta()]);
+    box.innerHTML = '';
+
+    const row = (name, sub, done, total, loaded, onClick) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'strow';
+      // ★数えられないものを0と言わない★
+      // その県のファイルをまだ読んでいないときは、行った数が分からない。
+      const count = loaded ? '<b>' + done + '</b> / ' + total : total + '駅';
+      b.innerHTML = '<span class="strow__n">' + escapeHtml(name) + '</span>'
+        + (sub ? '<span class="strow__p">' + escapeHtml(sub) + '</span>' : '')
+        + '<span class="strow__c">' + count + '</span>';
+      b.addEventListener('click', onClick);
+      return b;
+    };
+
+    if (mode === 'line') {
+      const hit = state.stIndex.lines
+        .filter((l) => l.live > 0 && (!q || l.name.toLowerCase().indexOf(q) >= 0));
+      if (!hit.length) {
+        box.innerHTML = '<p class="muted" style="padding:12px">該当がありません。</p>';
+        return;
+      }
+      for (const l of hit.slice(0, 400)) {
+        const loaded = l.prefs.every((c) => state.stPref[c]);
+        let done = 0;
+        if (loaded) {
+          const col = stationCol('line', l.id);
+          if (col) done = collectStats(col, visits, meta.hand, meta.extra).done;
+        }
+        box.appendChild(row(l.name, l.prefs.map(prefName).join('・'),
+          done, l.live, loaded, () => openStationCol('line', l.id)));
+      }
+      // ★黙って打ち切らない★ 何本隠れているかを必ず言う
+      if (hit.length > 400) {
+        const p = document.createElement('p');
+        p.className = 'muted';
+        p.style.padding = '10px 12px';
+        p.textContent = 'ほかに ' + (hit.length - 400) + ' 路線あります。上の欄で絞り込んでください。';
+        box.appendChild(p);
+      }
+      return;
+    }
+
+    const gone = mode === 'gone';
+    const hit = state.stIndex.prefs
+      .filter((p) => (gone ? p.gone : p.live) > 0 && (!q || p.name.indexOf(q) >= 0));
+    if (!hit.length) {
+      box.innerHTML = '<p class="muted" style="padding:12px">該当がありません。</p>';
+      return;
+    }
+    for (const p of hit) {
+      const loaded = !!state.stPref[p.code];
+      let done = 0;
+      if (loaded) {
+        const col = stationCol(mode, p.code);
+        if (col) done = collectStats(col, visits, meta.hand, meta.extra).done;
+      }
+      box.appendChild(row(p.name, '', done, gone ? p.gone : p.live, loaded,
+        () => openStationCol(mode, p.code)));
+    }
+  }
+
+  async function openStationCol(mode, key) {
+    if (mode === 'line') {
+      const ln = state.stIndex.lines.find((l) => l.id === key);
+      // 路線は県をまたぐ（東海道本線は8都府県）。通る県のぶんだけ読む。
+      await Promise.all((ln ? ln.prefs : []).map((c) => loadStationPref(c).catch(() => null)));
+    } else {
+      await loadStationPref(key).catch(() => null);
+    }
+    const col = stationCol(mode, key);
+    if (!col || !col.items.length) { toast('読み込めませんでした'); return; }
+    $('#collect-stations').hidden = true;
+    await openCollection(col);
+  }
+
+  function initStations() {
+    const back = $('#btn-st-back');
+    if (back) back.addEventListener('click', closeStations);
+    const seg = $('#st-seg');
+    if (seg) {
+      seg.addEventListener('click', (e) => {
+        const b = e.target.closest('.stseg__b');
+        if (!b) return;
+        state.stMode = b.dataset.mode;
+        seg.querySelectorAll('.stseg__b').forEach((x) => x.classList.toggle('is-on', x === b));
+        renderStationChooser();
+      });
+    }
+    const f = $('#st-filter');
+    if (f) f.addEventListener('input', () => renderStationChooser());
   }
 
   async function renderCollect() {
@@ -3406,6 +3638,21 @@
       box.appendChild(h);
       g.cols.forEach((c) => box.appendChild(card(c)));
     }
+    // 駅は桁が違うので、制覇率つきのカードにはしない。
+    // 「全国9,153駅のうち12駅」と出しても意味を持たないため、入口だけ置く。
+    const sh = document.createElement('p');
+    sh.className = 'cgroup';
+    sh.textContent = '駅（県別・路線別）';
+    box.appendChild(sh);
+    const sb = document.createElement('button');
+    sb.type = 'button';
+    sb.className = 'ccard';
+    sb.innerHTML = '<span class="ccard__mark">🚉</span>'
+      + '<span class="ccard__body"><b>鉄道駅<i class="ccard__area">全国</i></b>'
+      + '<small>県か路線を選んでから見ます。廃駅も入っています。</small></span>';
+    sb.addEventListener('click', () => openStations());
+    box.appendChild(sb);
+
     mine.innerHTML = '';
     if (!custom.length) {
       mine.innerHTML = '<p class="muted" style="padding:4px 2px">まだありません。</p>';
@@ -3431,10 +3678,18 @@
   }
 
   function closeCollection() {
+    const fromStations = !!(state.curCol && state.curCol.station);
     state.curCol = null;
     $('#collect-detail').hidden = true;
-    $('#collect-home').hidden = false;
-    renderCollect();
+    if (fromStations) {
+      // 駅は「県別 → その県の駅」の2段になっている。いちばん上まで戻されると
+      // 選び直すのが大変なので、選ぶ画面に戻す。
+      $('#collect-stations').hidden = false;
+      renderStationChooser();
+    } else {
+      $('#collect-home').hidden = false;
+      renderCollect();
+    }
   }
 
   async function renderCollectItems() {
@@ -3449,7 +3704,7 @@
 
     let done = 0;
     const rows = items.map((it) => {
-      const been = visitedItem(it, visits, hand);
+      const been = visitedItem(it, visits, hand, col.reach);
       if (been) done++;
       return { it: it, been: been };
     });

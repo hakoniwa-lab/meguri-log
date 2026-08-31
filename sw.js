@@ -5,7 +5,7 @@
    index.html / css / js / data を変更したら、必ず VERSION を上げること。
    上げないと、既に開いたことのある端末は古いキャッシュを返し続け、
    修正がいつまでも届かない（Service Workerは sw.js 自体が変わったときだけ再インストールされる）。 */
-const VERSION = 'v48';
+const VERSION = 'v49';
 const SHELL = 'meguri-shell-' + VERSION;
 const TILES = 'meguri-tiles-' + VERSION;
 const TILE_LIMIT = 400;
@@ -36,9 +36,13 @@ const COLLECTION_FILES = [
   'fudo36', 'hanatera102', 'nisshu22',
 ].map((id) => './data/collections/' + id + '.json');
 
+// 駅は県ごとに分かれていて全部で900KB。★入れておくのは索引だけ★
+// 県のファイルは開いた県のぶんだけ自然にキャッシュされる（データはキャッシュ優先）。
+const STATION_INDEX = './data/stations/index.json';
+
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(SHELL)
-    .then((c) => c.addAll(SHELL_FILES.concat(COLLECTION_FILES)))
+    .then((c) => c.addAll(SHELL_FILES.concat(COLLECTION_FILES, [STATION_INDEX])))
     .then(() => self.skipWaiting()));
 });
 

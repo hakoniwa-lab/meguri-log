@@ -769,3 +769,24 @@ a{color:var(--navy)}
   background:var(--bg); border:1px solid var(--line);
   font-size:10.5px; font-style:normal; font-weight:700; color:var(--muted);
 }
+
+/* 駅の選び方の切り替え（県別／路線別／廃駅）。
+   地図の「都道府県／市区町村」と同じ見た目にそろえてある */
+.stseg{display:flex; gap:6px; margin:10px 0 4px}
+.stseg__b{
+  flex:1 1 0; padding:9px 4px; border:1px solid var(--line); border-radius:10px;
+  background:#fff; color:var(--muted); font-size:13px; font-weight:700; cursor:pointer;
+}
+.stseg__b.is-on{background:var(--navy); border-color:var(--navy); color:#fff}
+/* 県・路線の1行。数は右端にそろえる（探すときに目が滑らないように） */
+.strow{
+  display:flex; align-items:center; gap:10px; width:100%;
+  padding:11px 12px; border:0; border-bottom:1px solid var(--line);
+  background:none; text-align:left; font-size:14px; cursor:pointer;
+}
+.strow:hover{background:var(--cream)}
+.strow__n{flex:1 1 auto; font-weight:700; min-width:0;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.strow__c{flex:0 0 auto; font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums}
+.strow__c b{color:var(--amber)}
+.strow__p{flex:0 0 auto; font-size:11px; color:var(--muted)}
