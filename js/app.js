@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v49';
+  const APP_VERSION = 'v50';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -58,6 +58,7 @@
     { key: 'michi', mark: '🛣️', label: '道の駅' },
     { key: 'sapa',  mark: '🅿️', label: 'SA・PA' },
     { key: 'park',  mark: '🚗', label: '駐車場' },
+    { key: 'gas',   mark: '⛽', label: 'ガソリンスタンド' },
     { key: 'toilet',mark: '🚻', label: 'トイレ' },
     { key: 'mtn',   mark: '⛰️', label: '山・登山' },
     { key: 'fall',  mark: '🏞️', label: '滝' },
@@ -65,7 +66,8 @@
     { key: 'camp',  mark: '⛺', label: 'キャンプ場' },
     { key: 'light', mark: '💡', label: '灯台' },
     { key: 'onsen', mark: '♨️', label: '温泉・銭湯' },
-    { key: 'home',  mark: '🏠', label: '実家・知人宅' },
+    { key: 'hosp',  mark: '🏥', label: '病院' },
+    { key: 'home',  mark: '🏠', label: '個人宅' },
     { key: 'other', mark: '✳️', label: 'その他' },
   ];
   // ★key は保存済みの記録が参照している。絶対に付け替えない★
@@ -1341,6 +1343,11 @@
     const wanted = ['__all__'].concat(days.slice(0, 40));
     const cur = box.dataset.days || '';
     const key = wanted.join(',');
+    // ★出す・出さないは、作り直すかどうかとは別に必ず決める★
+    // 以前はここを「中身が変わったときだけ」書いていたため、線を一度消して
+    // もう一度出すと、日付は同じままなので早く帰ってしまい、
+    // チップが隠れたきり戻らなかった。
+    box.hidden = !state.linesOn || !days.length;
     if (cur === key) {                       // 中身が同じなら選択状態だけ更新
       $$('#line-days .ldchip').forEach(function (b) {
         b.classList.toggle('is-on', (b.dataset.day || '__all__') === (state.lineDay || '__all__'));
@@ -1349,8 +1356,7 @@
     }
     box.dataset.days = key;
     box.innerHTML = '';
-    if (!days.length) { box.hidden = true; return; }
-    box.hidden = !state.linesOn;
+    if (!days.length) return;
 
     wanted.forEach(function (d) {
       const isAll = d === '__all__';
@@ -1710,7 +1716,7 @@
     return gj.features.find((f) => String(f.properties.code) === String(code));
   }
 
-  async function openSheet(level, code, coords) {
+  async function openSheet(level, code, coords, onlyId) {
     const feat = featureByCode(level, code);
     if (!feat) return;
     state.selected = {
@@ -1732,7 +1738,7 @@
       ? `現在地: ${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)}`
       : '座標は記録されません（地図から選択）';
 
-    await renderVisitList(spotIdOf(level, code));
+    await renderVisitList(spotIdOf(level, code), onlyId);
 
     // 同じ地点に場所の情報つきの記録があれば、引き継ぎボタンを出す
     const past = await Store.getVisitsBySpot(spotIdOf(level, code));
@@ -1768,8 +1774,12 @@
     clearPending();
   }
 
-  async function renderVisitList(spotId) {
-    const visits = await Store.getVisitsBySpot(spotId);
+  // onlyId を渡すと、その1件だけを出す。
+  // ★記録タブのカードから開いたのに、その市区町村の記録が全部並んでいた★
+  // 成田市に20件あると、見たかった1件がどれか分からなくなる。
+  async function renderVisitList(spotId, onlyId) {
+    const all = await Store.getVisitsBySpot(spotId);
+    const visits = onlyId ? all.filter((v) => v.id === onlyId) : all;
     visits.sort((a, b) => visitStamp(b).localeCompare(visitStamp(a)));
     const box = $('#visit-list');
     if (!visits.length) {
@@ -1777,6 +1787,16 @@
       return;
     }
     box.innerHTML = '';
+    // 1件だけ出しているときは、残りも見られることを言っておく（隠したままにしない）
+    if (onlyId && all.length > 1) {
+      const more = document.createElement('button');
+      more.type = 'button';
+      more.className = 'linkbtn';
+      more.style.margin = '0 0 8px';
+      more.textContent = 'この市区町村の記録をすべて見る（' + all.length + '件）';
+      more.addEventListener('click', () => renderVisitList(spotId));
+      box.appendChild(more);
+    }
     for (const v of visits) {
       const row = document.createElement('div');
       row.className = 'visit';
@@ -2542,7 +2562,13 @@
 
   async function makeHistCard(v) {
     const card = document.createElement('div');
-    card.className = 'hcard';
+    card.className = 'hcard is-tap';
+    // 「編集」の小さなボタンだけが入口だと気づきにくい。カードのどこを押しても開く。
+    // 中のボタン・リンク・写真は、それぞれの動きを優先する。
+    card.addEventListener('click', async function (e) {
+      if (e.target.closest('button, a, img, input, textarea, select')) return;
+      await openVisitForEdit(v);
+    });
 
     const head = document.createElement('div');
     head.className = 'hcard__head';
@@ -2719,7 +2745,7 @@
       drawLayer();
       renderProgress();
     }
-    await openSheet(lv, code);
+    await openSheet(lv, code, null, v.id);
     await startEdit(v);
   }
 
