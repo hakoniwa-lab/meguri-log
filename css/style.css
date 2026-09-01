@@ -798,3 +798,16 @@ a{color:var(--navy)}
 /* 記録タブのカードは全体が押せる。押せることが分かるように指の形にする */
 .hcard.is-tap{cursor:pointer}
 .hcard.is-tap:active{background:var(--cream)}
+
+/* 記録を見るだけの画面。入力欄が無いぶん、読みやすさだけを考えた並び */
+#viewer-body{margin:6px 0 16px}
+.vrow{display:flex; gap:10px; padding:9px 2px; border-bottom:1px solid var(--line)}
+.vrow__k{flex:0 0 88px; font-size:12px; color:var(--muted); padding-top:1px}
+.vrow__v{flex:1 1 auto; font-size:14px; font-weight:700; color:var(--ink);
+  word-break:break-word}
+.vmemo{
+  margin:12px 0 0; padding:11px 12px; background:var(--bg); border-radius:10px;
+  font-size:14px; line-height:1.7; white-space:pre-wrap;
+}
+.vshots{display:flex; flex-wrap:wrap; gap:8px; margin-top:12px}
+.vshots img{width:calc(50% - 4px); border-radius:10px; display:block}

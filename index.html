@@ -451,6 +451,24 @@
   </div>
 </div>
 
+<!-- 記録を見るだけの画面。
+     ★見ることと直すことを分ける★ カードやピンから開いたときに編集画面が出ると、
+     見返したいだけなのに入力欄が並び、うっかり書き換えてしまう。 -->
+<div id="viewer" class="sheet">
+  <div id="viewer-backdrop" class="sheet__backdrop"></div>
+  <div class="sheet__body">
+    <div class="sheet__head">
+      <div>
+        <h2 id="viewer-title">—</h2>
+        <p class="sheet__sublabel" id="viewer-sub"></p>
+      </div>
+      <button id="viewer-close" class="iconbtn" aria-label="閉じる">×</button>
+    </div>
+    <div id="viewer-body"></div>
+    <button type="button" id="viewer-edit" class="btn btn--wide">この記録を編集する</button>
+  </div>
+</div>
+
 <div id="toast" class="toast"></div>
 
 <footer class="foot">

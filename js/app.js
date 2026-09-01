@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v50';
+  const APP_VERSION = 'v51';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -178,6 +178,8 @@
     lastPlace: null,    // 同じ地点の前回の場所情報（引き継ぎ用）
     histMode: 'visits', // 記録タブの表示（visits / chome / stats）
     histShown: 0,
+    viewing: null,     // 見るだけの画面に出している記録
+    sheetOnly: null,   // 記録シートで1件だけ出しているときの id
   };
 
   const $ = (sel) => document.querySelector(sel);
@@ -218,6 +220,7 @@
     initTabs();
     initLevelSwitch();
     initSheet();
+    initViewer();
     initHistory();
     initSettings();
     initCollect();
@@ -1517,6 +1520,12 @@
         meta.textContent = bits.join(' ・ ');
         main.appendChild(meta);
       }
+      // 行そのものを押したら、その回の記録を見られる（直すのは「編集」から）
+      main.addEventListener('click', async () => {
+        state.map.closePopup();
+        await openVisitViewer(item);
+      });
+      main.style.cursor = 'pointer';
       li.appendChild(main);
       const edit = document.createElement('button');
       edit.type = 'button';
@@ -1559,13 +1568,13 @@
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'btn pinpop__edit';
-    btn.textContent = g.items.length > 1 ? 'ここに来たことを追加' : 'この記録を編集';
+    btn.textContent = g.items.length > 1 ? 'ここに来たことを追加' : 'この記録を見る';
     btn.addEventListener('click', async () => {
       state.map.closePopup();
       // 複数回来ている場所は「また来た」を足したいので、編集ではなく新規で開く。
       // 編集で開くと保存が最新の記録の上書きになり、回数が増えない。
       if (g.items.length > 1) await openPlaceForNewVisit(v);
-      else await openVisitForEdit(v);
+      else await openVisitViewer(v);       // ★まず見せる。直すのはその先から★
     });
     box.appendChild(btn);
     return box;
@@ -1738,6 +1747,10 @@
       ? `現在地: ${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)}`
       : '座標は記録されません（地図から選択）';
 
+    // ★どの1件を見ているかは覚えておく★
+    // 保存や削除のあとの描き直しは onlyId を渡してこないので、
+    // 覚えていないと「何回か操作すると全部出てくる」ことになる。
+    state.sheetOnly = onlyId || null;
     await renderVisitList(spotIdOf(level, code), onlyId);
 
     // 同じ地点に場所の情報つきの記録があれば、引き継ぎボタンを出す
@@ -1768,8 +1781,118 @@
     }
   }
 
+  // ---------------------------------------------------------------
+  // 記録を見るだけの画面
+  // ---------------------------------------------------------------
+  // ★見ることと直すことを分ける★
+  // これまでは記録に触ると必ず編集画面が開いた。見返したいだけなのに
+  // 入力欄が並び、うっかり書き換えてしまう。
+  // カードやピンを押したときは中身を見せるだけにして、
+  // 直すのは「編集」を押したときだけにする。
+  async function openVisitViewer(v) {
+    state.viewing = v;
+    const t = tagOf(v.tag);
+    $('#viewer-title').textContent = (v.place && v.place.name) || v.name || '記録';
+    const sub = [];
+    if (v.place && v.place.name) sub.push(v.name || '');
+    if (t.key) sub.push(t.mark + ' ' + t.label);
+    if (v.address && v.address.lv01Nm) sub.push(v.address.lv01Nm);
+    $('#viewer-sub').textContent = sub.filter(Boolean).join(' ・ ');
+
+    const box = $('#viewer-body');
+    box.innerHTML = '';
+    const row = (label, value) => {
+      if (value === '' || value === null || value === undefined) return;
+      const d = document.createElement('div');
+      d.className = 'vrow';
+      const k = document.createElement('span');
+      k.className = 'vrow__k';
+      k.textContent = label;
+      const val = document.createElement('span');
+      val.className = 'vrow__v';
+      val.textContent = value;
+      d.appendChild(k);
+      d.appendChild(val);
+      box.appendChild(d);
+    };
+
+    row('訪れた日', (v.visitedAt || '') + (v.visitedTime ? ' ' + v.visitedTime : ''));
+    if (t.key) row('タグ', t.mark + ' ' + t.label);
+    if (Number(v.amount) > 0) row('使った金額', '¥' + Number(v.amount).toLocaleString('ja-JP'));
+    if (v.rating) row('評価', '★'.repeat(v.rating) + '☆'.repeat(5 - v.rating));
+    if (v.revisit) row('', 'また行きたい');
+    if (v.goshuin && v.goshuin.name) {
+      const g = v.goshuin;
+      row(gsKindOf(g), [g.name, g.write, g.form, g.limited ? '限定' : ''].filter(Boolean).join(' ・ '));
+    }
+    if (v.memo) {
+      const m = document.createElement('p');
+      m.className = 'vmemo';
+      m.textContent = v.memo;
+      box.appendChild(m);
+    }
+    // 場所の情報は「その場所」の属性。ある分だけ出す
+    const p = v.place || {};
+    [['住所', p.address], ['電話', p.tel], ['営業時間', p.hours],
+     ['定休日', (p.closed || []).join('・')], ['サイト', p.web], ['SNS', p.sns]]
+      .forEach(([k, val]) => row(k, val || ''));
+    if (v.coords && typeof v.coords.lat === 'number') {
+      const jump = document.createElement('button');
+      jump.type = 'button';
+      jump.className = 'linkbtn';
+      jump.textContent = '地図でこの場所を見る';
+      jump.addEventListener('click', () => {
+        closeViewer();
+        switchTab('map');
+        setTimeout(() => state.map.setView([v.coords.lat, v.coords.lng], 16), 80);
+      });
+      box.appendChild(jump);
+    }
+
+    // 写真は最後にまとめて。読み込みで画面を待たせない
+    const shots = document.createElement('div');
+    shots.className = 'vshots';
+    box.appendChild(shots);
+    for (const pid of (v.photoIds || [])) {
+      const ph = await Store.getPhoto(pid);
+      if (!ph) continue;
+      const img = document.createElement('img');
+      img.src = URL.createObjectURL(ph.blob);
+      img.alt = '';
+      shots.appendChild(img);
+    }
+
+    $('#viewer').classList.add('is-open');
+  }
+
+  function closeViewer() {
+    $('#viewer').classList.remove('is-open');
+    // 作った URL は捨てる。開き直すたびに増えていくため
+    $$('#viewer-body img').forEach((im) => {
+      if (im.src.startsWith('blob:')) URL.revokeObjectURL(im.src);
+    });
+    state.viewing = null;
+  }
+
+  function initViewer() {
+    const close = () => closeViewer();
+    const c = $('#viewer-close');
+    if (c) c.addEventListener('click', close);
+    const bd = $('#viewer-backdrop');
+    if (bd) bd.addEventListener('click', close);
+    const ed = $('#viewer-edit');
+    if (ed) {
+      ed.addEventListener('click', async () => {
+        const v = state.viewing;
+        closeViewer();
+        if (v) await openVisitForEdit(v);
+      });
+    }
+  }
+
   function closeSheet() {
     $('#sheet').classList.remove('is-open');
+    state.sheetOnly = null;
     state.selected = null;
     clearPending();
   }
@@ -1778,8 +1901,9 @@
   // ★記録タブのカードから開いたのに、その市区町村の記録が全部並んでいた★
   // 成田市に20件あると、見たかった1件がどれか分からなくなる。
   async function renderVisitList(spotId, onlyId) {
+    const only = (onlyId === undefined) ? state.sheetOnly : onlyId;
     const all = await Store.getVisitsBySpot(spotId);
-    const visits = onlyId ? all.filter((v) => v.id === onlyId) : all;
+    const visits = only ? all.filter((v) => v.id === only) : all;
     visits.sort((a, b) => visitStamp(b).localeCompare(visitStamp(a)));
     const box = $('#visit-list');
     if (!visits.length) {
@@ -1788,13 +1912,16 @@
     }
     box.innerHTML = '';
     // 1件だけ出しているときは、残りも見られることを言っておく（隠したままにしない）
-    if (onlyId && all.length > 1) {
+    if (only && all.length > 1) {
       const more = document.createElement('button');
       more.type = 'button';
       more.className = 'linkbtn';
       more.style.margin = '0 0 8px';
       more.textContent = 'この市区町村の記録をすべて見る（' + all.length + '件）';
-      more.addEventListener('click', () => renderVisitList(spotId));
+      more.addEventListener('click', () => {
+        state.sheetOnly = null;              // 一度すべて出したら、そのまま
+        renderVisitList(spotId, null);
+      });
       box.appendChild(more);
     }
     for (const v of visits) {
@@ -2567,7 +2694,7 @@
     // 中のボタン・リンク・写真は、それぞれの動きを優先する。
     card.addEventListener('click', async function (e) {
       if (e.target.closest('button, a, img, input, textarea, select')) return;
-      await openVisitForEdit(v);
+      await openVisitViewer(v);            // ★見るだけ。直すのは「編集」から★
     });
 
     const head = document.createElement('div');
@@ -2707,26 +2834,12 @@
       card.appendChild(strip);
     }
 
-    // カードから、その地点の記録シートへ直接飛べるようにする
-    card.addEventListener('click', async function () {
-      const lv = v.category;
-      if (!LEVELS[lv]) return;
-      const ok = await ensureLevelData(lv);
-      if (!ok) return;
-      const code = String(v.spotId).slice(lv.length + 1);
-      if (state.level !== lv) {
-        state.level = lv;
-        $$('.lvbtn').forEach(function (x) {
-          x.classList.toggle('is-active', x.dataset.level === lv);
-        });
-        drawLayer();
-        renderProgress();
-      }
-      switchTab('map');
-      const f = featureByCode(lv, code);
-      if (f) state.map.fitBounds(L.geoJSON(f).getBounds(), { padding: [20, 20] });
-      openSheet(lv, code);
-    });
+    // ★ここに2つめのクリック処理を置かない★
+    // 以前はここにも「地図へ飛んでその市区町村のシートを開く」処理があり、
+    // カードの先頭で足した「見るだけ」と二重に動いていた。
+    // その結果、押すたびに市区町村の記録が全部並ぶシートまで開いていた
+    // （しかも1回目だけは地図の読み込みで遅れるため、たまたま正しく見えた）。
+    // 地図で見たいときは、見るだけの画面の「地図でこの場所を見る」から。
     return card;
   }
 
