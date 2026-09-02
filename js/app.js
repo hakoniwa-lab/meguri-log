@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v51';
+  const APP_VERSION = 'v52';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -220,6 +220,7 @@
     initTabs();
     initLevelSwitch();
     initSheet();
+    initSnsAdd();
     initViewer();
     initHistory();
     initSettings();
@@ -1488,7 +1489,13 @@
       c.className = 'pinpop__date';
       // 何度も買い物する場所は、回数だけでなく合計いくら使ったかが知りたい
       const sum = g.items.reduce((n, it) => n + (Number(it.amount) || 0), 0);
-      c.textContent = g.items.length + '回訪問'
+      // ★「出かけていない」記録は回数に数えない★
+      // 自宅からの通販を日付ごとに入れると、自宅だけ何十回訪問になってしまう。
+      // 金額は足す（通販の出費が見えるのは役に立つ）。
+      const went = g.items.filter((it) => !it.athome).length;
+      const away = g.items.length - went;
+      c.textContent = went + '回訪問'
+        + (away ? '（ほかに出かけていない記録 ' + away + '件）' : '')
         + (sum > 0 ? ' ・ 合計 ¥' + sum.toLocaleString('ja-JP') : '');
       box.appendChild(c);
     }
@@ -1520,13 +1527,23 @@
         meta.textContent = bits.join(' ・ ');
         main.appendChild(meta);
       }
-      // 行そのものを押したら、その回の記録を見られる（直すのは「編集」から）
+      // 行そのものを押しても見られるが、それだけだと気づけない。
+      // ★何度も来ている場所は「ここに来たことを追加」しか無く、中身が見られなかった★
       main.addEventListener('click', async () => {
         state.map.closePopup();
         await openVisitViewer(item);
       });
       main.style.cursor = 'pointer';
       li.appendChild(main);
+      const see = document.createElement('button');
+      see.type = 'button';
+      see.className = 'linkbtn';
+      see.textContent = '見る';
+      see.addEventListener('click', async () => {
+        state.map.closePopup();
+        await openVisitViewer(item);
+      });
+      li.appendChild(see);
       const edit = document.createElement('button');
       edit.type = 'button';
       edit.className = 'linkbtn';
@@ -1691,6 +1708,13 @@
     return inside;
   }
 
+  // ★どのポリゴンにも入らない地点がある★
+  // 埋立地（お台場・京浜島・大黒ふ頭）や、境界を簡略化した岸ぎりぎりの場所。
+  // 何も返さないと「タップしても反応しない・通っても色が付かない」になる。
+  // 少しだけ外に出ているだけなら、いちばん近い区域として扱う。
+  // 2km。これ以上離れていたら本当に海の上なので何も返さない。
+  const SNAP_DEG = 0.02;
+
   function findAt(level, lat, lng) {
     const gj = state.geo[level];
     if (!gj) return null;
@@ -1699,7 +1723,24 @@
         if (pointInRing(lng, lat, poly[0])) return f;
       }
     }
-    return null;
+    return nearestFeature(gj, lat, lng);
+  }
+
+  function nearestFeature(gj, lat, lng) {
+    const cos = Math.cos(lat * Math.PI / 180);
+    let best = SNAP_DEG * SNAP_DEG;
+    let hit = null;
+    for (const f of gj.features) {
+      for (const poly of f.geometry.coordinates) {
+        for (const pt of poly[0]) {
+          const dx = (pt[0] - lng) * cos;
+          const dy = pt[1] - lat;
+          const d = dx * dx + dy * dy;
+          if (d < best) { best = d; hit = f; }
+        }
+      }
+    }
+    return hit;
   }
 
   // 町丁目・大字を住所文字列として取得する。通信できないときは何も返さない。
@@ -1821,6 +1862,7 @@
     if (Number(v.amount) > 0) row('使った金額', '¥' + Number(v.amount).toLocaleString('ja-JP'));
     if (v.rating) row('評価', '★'.repeat(v.rating) + '☆'.repeat(5 - v.rating));
     if (v.revisit) row('', 'また行きたい');
+    if (v.athome) row('', '出かけていない記録（通販・電話など）');
     if (v.goshuin && v.goshuin.name) {
       const g = v.goshuin;
       row(gsKindOf(g), [g.name, g.write, g.form, g.limited ? '限定' : ''].filter(Boolean).join(' ・ '));
@@ -1833,9 +1875,10 @@
     }
     // 場所の情報は「その場所」の属性。ある分だけ出す
     const p = v.place || {};
-    [['住所', p.address], ['電話', p.tel], ['営業時間', p.hours],
-     ['定休日', (p.closed || []).join('・')], ['サイト', p.web], ['SNS', p.sns]]
+    [['建物', p.building], ['住所', p.address], ['電話', p.tel], ['営業時間', p.hours],
+     ['定休日', (p.closed || []).join('・')], ['サイト', p.web]]
       .forEach(([k, val]) => row(k, val || ''));
+    snsList(p).forEach((x, i) => row(i ? '' : 'SNS', x));
     if (v.coords && typeof v.coords.lat === 'number') {
       const jump = document.createElement('button');
       jump.type = 'button';
@@ -2060,6 +2103,7 @@
     setTagValue(visit.tag || '');
     $('#visit-amount').value = (visit.amount || visit.amount === 0) ? visit.amount : '';
     $('#visit-revisit').checked = !!visit.revisit;
+    $('#visit-athome').checked = !!visit.athome;
     setRating(visit.rating || 0);
     setPlace(visit.place || null);
     setGoshuin(visit.goshuin || null);
@@ -2253,18 +2297,56 @@
     return (g.name || g.write || g.form || g.limited) ? g : null;
   }
 
+  // 古い記録は sns が文字列1つ。新しい記録は配列。★両方読めるようにする★
+  function snsList(p) {
+    if (Array.isArray(p.sns)) return p.sns.filter(Boolean);
+    return p.sns ? [p.sns] : [];
+  }
+
+  function addSnsRow(value) {
+    const box = $('#place-sns-list');
+    if (!box) return;
+    const row = document.createElement('div');
+    row.className = 'snsrow';
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.placeholder = 'URL または @アカウント';
+    inp.value = value || '';
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.className = 'snsrow__x';
+    x.textContent = '×';
+    x.setAttribute('aria-label', 'この行を消す');
+    x.addEventListener('click', () => {
+      row.remove();
+      if (!box.children.length) addSnsRow('');   // 最低1行は残す
+    });
+    row.appendChild(inp);
+    row.appendChild(x);
+    box.appendChild(row);
+  }
+
+  function initSnsAdd() {
+    const b = $('#place-sns-add');
+    if (b) b.addEventListener('click', () => addSnsRow(''));
+  }
+
   function setPlace(p) {
     p = p || {};
     $('#place-name').value = p.name || '';
+    $('#place-building').value = p.building || '';
     $('#place-address').value = p.address || '';
     $('#place-tel').value = p.tel || '';
     $('#place-hours').value = p.hours || '';
     $('#place-web').value = p.web || '';
-    $('#place-sns').value = p.sns || '';
+    const list = snsList(p);
+    $('#place-sns-list').innerHTML = '';
+    (list.length ? list : ['']).forEach((v) => addSnsRow(v));
     const closed = p.closed || [];
     $$('#place-closed .day').forEach((b) => b.classList.toggle('is-on', closed.includes(b.dataset.day)));
     // 何か入っていれば畳まずに開いておく（入力済みなのに隠れていると気づけない）
-    const any = ['name', 'address', 'tel', 'hours', 'web', 'sns'].some((k) => p[k]) || closed.length;
+    const any = ['name', 'building', 'address', 'tel', 'hours', 'web'].some((k) => p[k])
+      || list.length || closed.length;
     const body = $('#place-body'), tg = $('#place-toggle');
     if (any) { body.removeAttribute('hidden'); tg.classList.add('is-open'); }
     else { body.setAttribute('hidden', ''); tg.classList.remove('is-open'); }
@@ -2272,22 +2354,26 @@
 
   function getPlace() {
     const closed = $$('#place-closed .day.is-on').map((b) => b.dataset.day);
+    const sns = $$('#place-sns-list input').map((i) => i.value.trim()).filter(Boolean);
     const p = {
       name: $('#place-name').value.trim(),
+      building: $('#place-building').value.trim(),
       address: $('#place-address').value.trim(),
       tel: $('#place-tel').value.trim(),
       hours: $('#place-hours').value.trim(),
       web: $('#place-web').value.trim(),
-      sns: $('#place-sns').value.trim(),
+      sns,                              // ★配列。古い記録は文字列なので読む側で吸収する★
       closed,
     };
-    const any = p.name || p.address || p.tel || p.hours || p.web || p.sns || closed.length;
+    const any = p.name || p.building || p.address || p.tel || p.hours || p.web
+      || sns.length || closed.length;
     return any ? p : null;
   }
 
   function clearExtraFields() {
     $('#visit-amount').value = '';
     $('#visit-revisit').checked = false;
+    $('#visit-athome').checked = false;
     setRating(0);
     setPlace(null);
     setGoshuin(null);
@@ -2343,6 +2429,7 @@
           amount: amountValue(),
           rating: getRating(),
           revisit: $('#visit-revisit').checked,
+          athome: $('#visit-athome').checked,
           place: getPlace(),
           goshuin: getGoshuin(),
           photoIds,
@@ -2360,6 +2447,7 @@
           amount: amountValue(),
           rating: getRating(),
           revisit: $('#visit-revisit').checked,
+          athome: $('#visit-athome').checked,
           place: getPlace(),
           goshuin: getGoshuin(),
           coords: sel.coords,
@@ -2767,6 +2855,12 @@
       rv.textContent = 'また行きたい';
       badges.appendChild(rv);
     }
+    if (v.athome) {
+      const ah = document.createElement('span');
+      ah.className = 'badge badge--athome';
+      ah.textContent = '出かけていない';
+      badges.appendChild(ah);
+    }
     if (v.goshuin) {
       const g = v.goshuin;
       [g.write, g.form, g.limited ? '限定' : ''].filter(Boolean).forEach(function (t) {
@@ -3025,6 +3119,8 @@
     if (revisit.length || rated.length) {
       const rows = [];
       if (revisit.length) rows.push(['また行きたい', revisit.length + ' 件']);
+      const athome = all.filter(function (v) { return v.athome; });
+      if (athome.length) rows.push(['出かけていない記録', athome.length + ' 件']);
       if (rated.length) {
         const avg = rated.reduce(function (n, v) { return n + v.rating; }, 0) / rated.length;
         rows.push(['評価をつけた記録', rated.length + ' 件']);

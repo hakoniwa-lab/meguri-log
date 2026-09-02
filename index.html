@@ -377,6 +377,11 @@
       <label class="check">
         <input type="checkbox" id="visit-revisit"> また行きたい
       </label>
+      <!-- 自宅からの通販などを日付ごとに入れると、その場所だけ訪問回数が
+           際限なく増える。記録は残したいが「行った回数」ではない。 -->
+      <label class="check">
+        <input type="checkbox" id="visit-athome"> 出かけていない（通販・電話など）
+      </label>
     </div>
 
     <label class="field">
@@ -415,6 +420,9 @@
         <button type="button" class="btn btn--sub btn--wide" id="place-copy" hidden>前回の情報を引き継ぐ</button>
         <label class="mini2"><small>場所の名前</small>
           <input type="text" id="place-name" placeholder="例: 〇〇珈琲店"></label>
+        <!-- 目的地の名前と建物は別物。仕事で「〇〇センター の 物流棟」まで残したいという話から -->
+        <label class="mini2"><small>建物・棟・階</small>
+          <input type="text" id="place-building" placeholder="例: 第2物流棟 3F"></label>
         <label class="mini2"><small>住所</small>
           <input type="text" id="place-address" placeholder="例: 石川県金沢市…"></label>
         <label class="mini2"><small>電話番号</small>
@@ -425,8 +433,11 @@
           <div class="days" id="place-closed"></div></div>
         <label class="mini2"><small>ウェブサイト</small>
           <input type="url" id="place-web" inputmode="url" placeholder="https://"></label>
-        <label class="mini2"><small>SNS</small>
-          <input type="text" id="place-sns" placeholder="URL または @アカウント"></label>
+        <!-- X・Instagram・Facebook…と複数ある。欄を並べると長くなるので、足せる形にした -->
+        <div class="mini2"><small>SNS</small>
+          <div id="place-sns-list"></div>
+          <button type="button" id="place-sns-add" class="linkbtn">＋ SNSを追加</button>
+        </div>
       </div>
     </div>
 

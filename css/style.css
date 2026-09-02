@@ -811,3 +811,14 @@ a{color:var(--navy)}
 }
 .vshots{display:flex; flex-wrap:wrap; gap:8px; margin-top:12px}
 .vshots img{width:calc(50% - 4px); border-radius:10px; display:block}
+
+/* SNSは行を足せる。1行ぶんの入力欄と、その行を消す× */
+.snsrow{display:flex; gap:6px; align-items:center; margin-bottom:6px}
+.snsrow input{flex:1 1 auto; min-width:0}
+.snsrow__x{
+  flex:0 0 auto; width:30px; height:30px; border:1px solid var(--line);
+  border-radius:8px; background:#fff; color:var(--muted); font-size:16px;
+  line-height:1; cursor:pointer;
+}
+/* 出かけていない記録は、一覧でひと目で分かるようにしておく */
+.badge--athome{background:var(--line); color:var(--muted)}
