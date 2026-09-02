@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v52';
+  const APP_VERSION = 'v53';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -1484,19 +1484,26 @@
     sub.textContent = parts.filter(Boolean).join(' ・ ');
     if (sub.textContent) box.appendChild(sub);
 
-    if (g.items.length > 1) {
+    // 1件でも「出かけていない」分があれば、内訳が要る
+    if (g.items.length > 1 || g.items.some((it) => it.athome)) {
       const c = document.createElement('div');
       c.className = 'pinpop__date';
       // 何度も買い物する場所は、回数だけでなく合計いくら使ったかが知りたい
-      const sum = g.items.reduce((n, it) => n + (Number(it.amount) || 0), 0);
-      // ★「出かけていない」記録は回数に数えない★
-      // 自宅からの通販を日付ごとに入れると、自宅だけ何十回訪問になってしまう。
-      // 金額は足す（通販の出費が見えるのは役に立つ）。
-      const went = g.items.filter((it) => !it.athome).length;
-      const away = g.items.length - went;
-      c.textContent = went + '回訪問'
-        + (away ? '（ほかに出かけていない記録 ' + away + '件）' : '')
-        + (sum > 0 ? ' ・ 合計 ¥' + sum.toLocaleString('ja-JP') : '');
+      // ★「出かけていない」記録は、回数にも金額にも混ぜない★
+      // 自宅からの通販を日付ごとに入れると、自宅だけ何十回訪問・何万円になってしまう。
+      // 消してしまうと通販の出費が見えなくなるので、足さずに横に分けて出す。
+      const yen = (n) => '¥' + n.toLocaleString('ja-JP');
+      const money = (list) => list.reduce((n, it) => n + (Number(it.amount) || 0), 0);
+      const went = g.items.filter((it) => !it.athome);
+      const away = g.items.filter((it) => it.athome);
+      const wentYen = money(went);
+      const awayYen = money(away);
+      c.textContent = went.length + '回訪問'
+        + (wentYen > 0 ? ' ・ ' + yen(wentYen) : '')
+        + (away.length
+            ? '（出かけていない ' + away.length + '件'
+              + (awayYen > 0 ? ' ・ ' + yen(awayYen) : '') + '）'
+            : '');
       box.appendChild(c);
     }
 
@@ -3069,6 +3076,10 @@
     // 使ったお金
     const spent = all.reduce(function (n, v) { return n + (Number(v.amount) || 0); }, 0);
     const spentCount = all.filter(function (v) { return Number(v.amount) > 0; }).length;
+    // 出かけていない分（通販など）は、出かけた分と混ぜない
+    const homeSpent = all.reduce(function (n, v) {
+      return n + (v.athome ? (Number(v.amount) || 0) : 0);
+    }, 0);
     if (spent > 0) {
       const byMonth = new Map();
       all.forEach(function (v) {
@@ -3082,6 +3093,11 @@
         ['記録した回数', spentCount + ' 件'],
         ['1回あたり', '¥' + Math.round(spent / spentCount).toLocaleString('ja-JP')],
       ];
+      if (homeSpent > 0) {
+        rows.splice(1, 0,
+          ['うち出かけた分', '¥' + (spent - homeSpent).toLocaleString('ja-JP')],
+          ['うち出かけていない分', '¥' + homeSpent.toLocaleString('ja-JP')]);
+      }
       Array.from(byMonth.entries())
         .sort(function (a, b) { return b[0].localeCompare(a[0]); })
         .slice(0, 6)
