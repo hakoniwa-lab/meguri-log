@@ -65,6 +65,34 @@ const VERSION = 'v2';   // ← 変更のたびに v3, v4 … と上げる
   「画像を保存」でカメラロールに入る。使えない環境はダウンロードにフォールバックする。
 - カメラロールに確実に残したいなら、**端末の標準カメラで撮ってから「写真から選ぶ」**のが確実。
 
+## 集めるリストを増やす
+
+`data/collections/<id>.json` を1本足すと「集めるリスト」が1つ増える。
+中身は `tools/build_collections.py` で Wikidata / ウィキペディア日本語版から作る。
+
+```bash
+python3 tools/build_collections.py --list                # 作れるリストを見る
+python3 tools/build_collections.py kamakura33 --dry-run  # 中身だけ確認する
+python3 tools/build_collections.py kamakura33            # 書き出す
+```
+
+**このスクリプトは `query.wikidata.org` と `ja.wikipedia.org` に出られる場所で動かすこと。**
+Claude Code のクラウドセッションは既定でこの2ホストが塞がれていて（CONNECT に 403 が返る）、
+座標が1件も取れない。手元の端末で動かすか、クラウド環境のネットワーク許可に足す。
+
+書き出したあと、**この順番で**3か所を当てる。
+
+1. `js/app.js` の `BUILTIN_COLLECTIONS` に1行足す
+2. `sw.js` の `COLLECTION_FILES` に id を足す
+3. `sw.js` の `VERSION` を上げる
+
+**2を1より先にやってはいけない。** JSONが無いまま `COLLECTION_FILES` に名前だけ足すと、
+`install` の `addAll` が落ちて Service Worker のインストールごと失敗する。
+そのリストが出ないだけでは済まず、**オフライン起動が丸ごと死ぬ**。
+逆に1だけ先にやるのは安全で、`loadCollections()` は1本読めなくても残りを出す。
+
+貼るべき行は、スクリプトが実行の最後に画面へ出す。
+
 ## 地図データについて
 
 `data/prefectures.geojson` は [dataofjapan/land](https://github.com/dataofjapan/land) の
