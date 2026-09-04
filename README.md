@@ -95,3 +95,19 @@ GitHub Pages は標準でHTTPSなので、公開後はそのまま動く。
 | 4 | 御朱印の記録（写真主体） |
 | 5 | 複数端末での同期 |
 | — | 市区町村（約1,700）の制覇。境界データの軽量化が主作業 |
+
+## 集めるリストを増やすときの当て先（順番を守る）
+
+`data/collections/<id>.json` を置いたあと、**この順番で**3か所を当てる。
+
+1. `js/app.js` の `BUILTIN_COLLECTIONS` に1行足す
+2. `sw.js` の `COLLECTION_FILES` に id を足す
+3. `sw.js` の `VERSION` と `js/app.js` の `APP_VERSION` を上げる
+
+**2を1より先にやってはいけない。** JSON が無いまま `COLLECTION_FILES` に名前だけ足すと、
+`install` の `addAll` が落ちて Service Worker のインストールごと失敗する。
+そのリストが出ないだけでは済まず、**オフライン起動が丸ごと死ぬ**。
+逆に1だけ先にやるのは安全で、`loadCollections()` は1本読めなくても残りを出す。
+
+データを作るスクリプトはこのリポジトリではなく `projects/meguri-log/tools/` にある
+（`build_collections.py` / `build_stations.py` / `build_roadside.py`）。

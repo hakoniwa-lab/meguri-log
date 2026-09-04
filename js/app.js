@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v53';
+  const APP_VERSION = 'v54';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -1336,9 +1336,51 @@
       const b = L.latLngBounds(c.places.map((g) => [g.lat, g.lng]));
       const fit = state.map.getBoundsZoom(b, false, [40, 40]);
       const next = Math.min(Math.max(fit, state.map.getZoom() + 2), state.map.getMaxZoom());
+      // ★最大ズームでもばらけない束がある★
+      // 「同じ場所は50m以上離れている」は名前の無い記録の話で、名前が違えば
+      // 14m しか離れていない場所も別のピンになる（羽田の待機場トイレとコンビニ）。
+      // 最大ズーム18でも 14m ≒ 29px で 48px の内側なので、押しても同じズームに
+      // setView するだけ＝何も起きないように見えていた。
+      // これ以上寄れないときは、中の場所を一覧で出して選んでもらう。
+      if (next <= state.map.getZoom()) {
+        L.popup({ maxWidth: 280 })
+          .setLatLng([c.lat, c.lng])
+          .setContent(buildClusterPopup(c))
+          .openOn(state.map);
+        return;
+      }
       state.map.setView(b.getCenter(), next);
     });
     return m;
+  }
+
+  // 割れない束の中身。押すとその場所の吹き出しを開く
+  function buildClusterPopup(c) {
+    const box = document.createElement('div');
+    box.className = 'cpop';
+    const h = document.createElement('b');
+    h.className = 'cpop__h';
+    h.textContent = 'この辺りの ' + c.places.length + ' か所';
+    box.appendChild(h);
+    for (const g of c.places) {
+      const v = g.items[0];
+      const t = tagOf(v.tag);
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'cpop__row';
+      row.innerHTML = '<span>' + t.mark + '</span>'
+        + '<span class="cpop__n">' + escapeHtml(g.name || v.name || '') + '</span>'
+        + (g.items.length > 1 ? '<small>' + g.items.length + '回</small>' : '');
+      row.addEventListener('click', () => {
+        state.map.closePopup();
+        L.popup({ offset: [0, -30] })
+          .setLatLng([g.lat, g.lng])
+          .setContent(buildPinPopup(g, t))
+          .openOn(state.map);
+      });
+      box.appendChild(row);
+    }
+    return box;
   }
 
   function buildLineDayChips(days) {
@@ -3518,6 +3560,15 @@
     { id: 'jizo108',    file: './data/collections/jizo108.json' },
     { id: 'sankei',     file: './data/collections/sankei.json' },
     { id: 'sanmeien',   file: './data/collections/sanmeien.json' },
+    { id: 'michinoeki',   file: './data/collections/michinoeki.json' },
+    { id: 'sapa',         file: './data/collections/sapa.json' },
+    { id: 'sanmeibaku',   file: './data/collections/sanmeibaku.json' },
+    { id: 'sanmeisen',    file: './data/collections/sanmeisen.json' },
+    { id: 'yakei3',       file: './data/collections/yakei3.json' },
+    { id: 'sandaiinari',  file: './data/collections/sandaiinari.json' },
+    { id: 'kamakura33',   file: './data/collections/kamakura33.json' },
+    { id: 'edo33',        file: './data/collections/edo33.json' },
+    { id: 'kamakura24', file: './data/collections/kamakura24.json' },
   ];
 
   // 「もう行った」と見なす距離。城や霊場は敷地が広く、入口で記録することも
@@ -3966,7 +4017,8 @@
     const box = $('#cdet-items');
     box.innerHTML = '';
     const shown = rows.filter((r) =>
-      (!todoOnly || !r.been) && (!q || r.it.name.toLowerCase().indexOf(q) >= 0));
+      (!todoOnly || !r.been)
+      && (!q || (r.it.name + ' ' + (r.it.kuni || '')).toLowerCase().indexOf(q) >= 0));
     if (!shown.length) {
       box.innerHTML = '<p class="muted" style="padding:12px">該当がありません。</p>';
       return;

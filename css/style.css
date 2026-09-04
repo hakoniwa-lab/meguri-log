@@ -822,3 +822,15 @@ a{color:var(--navy)}
 }
 /* 出かけていない記録は、一覧でひと目で分かるようにしておく */
 .badge--athome{background:var(--line); color:var(--muted)}
+
+/* 割れない束の中身。1行1か所、押すとその場所の吹き出しへ */
+.cpop{min-width:200px}
+.cpop__h{display:block; font-size:12px; color:var(--muted); margin:0 0 6px}
+.cpop__row{
+  display:flex; align-items:center; gap:8px; width:100%; padding:8px 4px;
+  border:0; border-top:1px solid var(--line); background:none; text-align:left;
+  font:inherit; font-size:13.5px; font-weight:700; color:var(--navy); cursor:pointer;
+}
+.cpop__row:active{background:var(--cream)}
+.cpop__n{flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.cpop__row small{flex:0 0 auto; font-weight:400; color:var(--muted)}
