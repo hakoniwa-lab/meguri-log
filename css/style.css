@@ -834,3 +834,16 @@ a{color:var(--navy)}
 .cpop__row:active{background:var(--cream)}
 .cpop__n{flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .cpop__row small{flex:0 0 auto; font-weight:400; color:var(--muted)}
+
+/* 集めるの見出しは押して畳める。畳んだ印は左の三角 */
+.cgroup--btn{
+  display:flex; align-items:center; gap:6px; width:100%; border:0; background:none;
+  font:inherit; text-align:left; cursor:pointer;
+}
+.cgroup__caret{
+  width:0; height:0; border-left:6px solid var(--muted);
+  border-top:5px solid transparent; border-bottom:5px solid transparent;
+  transform:rotate(90deg); transition:transform .15s;
+}
+.cgroup--btn.is-folded .cgroup__caret{transform:rotate(0deg)}
+.cgroup__body{margin-bottom:4px}

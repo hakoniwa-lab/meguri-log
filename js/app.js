@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v55';
+  const APP_VERSION = 'v56';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -3562,6 +3562,9 @@
     { id: 'whs',        file: './data/collections/whs.json' },
     { id: 'castle100',  file: './data/collections/castle100.json' },
     { id: 'castle100b', file: './data/collections/castle100b.json' },
+    { id: 'castle12',     file: './data/collections/castle12.json' },
+    { id: 'kokuho5',      file: './data/collections/kokuho5.json' },
+    { id: 'sanmeijo',     file: './data/collections/sanmeijo.json' },
     { id: 'shikoku88',  file: './data/collections/shikoku88.json' },
     { id: 'saikoku33',  file: './data/collections/saikoku33.json' },
     { id: 'bando33',    file: './data/collections/bando33.json' },
@@ -3795,7 +3798,37 @@
     };
   }
 
+  // ★道の駅1,223か所を1本の一覧にすると探せない★ 駅と同じく、まず県を選ぶ。
+  // 駅の「選ぶ画面」をそのまま借り、県別／路線別の切り替えだけ隠す。
+  // 開いた先のリストは元と同じ id にする（手で付けた印や自分で足した場所が
+  // 全国と県別で食い違わないように）。
+  function openPrefChooser(col) {
+    state.chooserCol = col;
+    state.stMode = 'colpref';
+    $('#collect-home').hidden = true;
+    $('#collect-stations').hidden = false;
+    $('#st-seg').hidden = true;
+    $('#st-filter').value = '';
+    $('#collect-stations .cdet__title').textContent = (col.mark || '') + ' ' + col.name;
+    $('#st-note').textContent = col.items.length + 'か所。県を選ぶと、その県だけの一覧になります。'
+      + (col.note ? ' ' + col.note : '');
+    renderStationChooser();
+  }
+
+  function prefSlice(col, pref) {
+    const items = pref ? col.items.filter((i) => i.kuni === pref) : col.items;
+    return Object.assign({}, col, {
+      items: items,
+      name: col.name + (pref ? '（' + pref + '）' : '（全国）'),
+      prefView: true,
+    });
+  }
+
   async function openStations() {
+    state.chooserCol = null;
+    if (state.stMode === 'colpref') state.stMode = 'pref';
+    $('#st-seg').hidden = false;
+    $('#collect-stations .cdet__title').textContent = '\uD83D\uDE89 鉄道駅';
     $('#collect-home').hidden = true;
     $('#collect-stations').hidden = false;
     $('#st-note').textContent = '読み込んでいます…';
@@ -3819,11 +3852,40 @@
 
   async function renderStationChooser() {
     const box = $('#st-list');
-    if (!box || !state.stIndex) return;
+    if (!box) return;
     const q = (($('#st-filter') || {}).value || '').trim().toLowerCase();
     const mode = state.stMode;
     const [visits, meta] = await Promise.all([Store.getAllVisits(), collectMeta()]);
     box.innerHTML = '';
+
+    // 道の駅・SA/PA の県別。並びは JSON の順（県コード順）をそのまま使う
+    if (mode === 'colpref') {
+      const col = state.chooserCol;
+      if (!col) return;
+      const prefs = [];
+      for (const it of col.items) if (it.kuni && !prefs.includes(it.kuni)) prefs.push(it.kuni);
+      const mk = (label, sub, sub2, sliceCol) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'strow';
+        const st = collectStats(sliceCol, visits, meta.hand, meta.extra);
+        b.innerHTML = '<span class="strow__n">' + escapeHtml(label) + '</span>'
+          + (sub ? '<span class="strow__p">' + escapeHtml(sub) + '</span>' : '')
+          + '<span class="strow__c"><b>' + st.done + '</b> / ' + st.total + '</span>';
+        b.addEventListener('click', async () => {
+          $('#collect-stations').hidden = true;
+          await openCollection(sliceCol);
+        });
+        return b;
+      };
+      if (!q) box.appendChild(mk('全国', '', '', prefSlice(col, null)));
+      for (const pf of prefs) {
+        if (q && pf.indexOf(q) < 0) continue;
+        box.appendChild(mk(pf, '', '', prefSlice(col, pf)));
+      }
+      return;
+    }
+    if (!state.stIndex) return;
 
     const row = (name, sub, done, total, loaded, onClick) => {
       const b = document.createElement('button');
@@ -3942,7 +4004,7 @@
         + '<span class="ccard__bar"><i style="width:' + pct + '%"></i></span>'
         + '<small>' + s.done + ' / ' + s.total + ' か所（' + pct + '%）</small>'
         + '</span>';
-      b.addEventListener('click', () => openCollection(col));
+      b.addEventListener('click', () => (col.byPref ? openPrefChooser(col) : openCollection(col)));
       return b;
     };
 
@@ -3957,12 +4019,26 @@
       if (!bucket) { bucket = { name: g, cols: [] }; groups.push(bucket); }
       bucket.cols.push(c);
     }
+    // ★35本を全部並べると探せない★ 見出しを押すと畳める。畳んだ見出しは端末に覚える
+    const folded = new Set((await Store.getMeta('collectFold')) || []);
     for (const g of groups) {
-      const h = document.createElement('p');
-      h.className = 'cgroup';
-      h.textContent = g.name + '（' + g.cols.length + '）';
+      const h = document.createElement('button');
+      h.type = 'button';
+      h.className = 'cgroup cgroup--btn' + (folded.has(g.name) ? ' is-folded' : '');
+      h.innerHTML = '<i class="cgroup__caret"></i>' + escapeHtml(g.name) + '（' + g.cols.length + '）';
+      const body = document.createElement('div');
+      body.className = 'cgroup__body';
+      body.hidden = folded.has(g.name);
+      g.cols.forEach((c) => body.appendChild(card(c)));
+      h.addEventListener('click', async () => {
+        const now = !body.hidden;              // 今開いているなら畳む
+        body.hidden = now;
+        h.classList.toggle('is-folded', now);
+        if (now) folded.add(g.name); else folded.delete(g.name);
+        await Store.setMeta('collectFold', Array.from(folded));
+      });
       box.appendChild(h);
-      g.cols.forEach((c) => box.appendChild(card(c)));
+      box.appendChild(body);
     }
     // 駅は桁が違うので、制覇率つきのカードにはしない。
     // 「全国9,153駅のうち12駅」と出しても意味を持たないため、入口だけ置く。
@@ -4004,7 +4080,7 @@
   }
 
   function closeCollection() {
-    const fromStations = !!(state.curCol && state.curCol.station);
+    const fromStations = !!(state.curCol && (state.curCol.station || state.curCol.prefView));
     state.curCol = null;
     $('#collect-detail').hidden = true;
     if (fromStations) {
