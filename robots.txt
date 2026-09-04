@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://hakoniwa-lab.github.io/meguri-log/sitemap.xml
+Sitemap: https://hakoniwalab.com/meguri-log/sitemap.xml
