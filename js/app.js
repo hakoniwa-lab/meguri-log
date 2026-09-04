@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v60';
+  const APP_VERSION = 'v61';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -4161,7 +4161,10 @@
       const rough = r.it.approx ? '<i class="citem__rough" title="番地が資料に無く、'
         + '地図にも載っていないため、市区町村の中心に置いています">およその位置</i>' : '';
       jump.innerHTML = no + escapeHtml(r.it.name) + kuni + rough
-        + (r.it.mine ? '<i class="citem__mine">自分で追加</i>' : '');
+        + (r.it.mine ? '<i class="citem__mine">自分で追加</i>' : '')
+        // メモがあれば名前の下に出す。もらったリストの「搬入口は裏」などが読めないと用をなさない
+        + (r.it.note ? '<small class="citem__note">' + escapeHtml(r.it.note) + '</small>' : '')
+        + (r.it.address ? '<small class="citem__addr">' + escapeHtml(r.it.address) + '</small>' : '');
       jump.addEventListener('click', () => {
         switchTab('map');
         // おおよその位置なら寄りすぎない。近づくほど「ここにある」と見えてしまう
@@ -4399,6 +4402,8 @@
         items: (col.items || []).map((i) => {
           const o = { name: i.name, lat: i.lat, lng: i.lng };
           if (i.no) o.no = i.no;
+          if (i.note) o.note = i.note;          // 渡す相手にも同じメモが要る
+          if (i.address) o.address = i.address;
           return o;
         }),
       },
@@ -4439,7 +4444,17 @@
       return;
     }
     // 座標が無いものは地図に出せないので入れない
-    const items = c.items.filter((i) => typeof i.lat === 'number' && typeof i.lng === 'number' && i.name);
+    // ★もらったリストのメモを捨てない★
+    // 配送先のように「どこで何をするか」が書いてあると、名前だけでは用が足りない。
+    const items = c.items
+      .filter((i) => typeof i.lat === 'number' && typeof i.lng === 'number' && i.name)
+      .map((i) => {
+        const o = { name: i.name, lat: i.lat, lng: i.lng };
+        if (i.no) o.no = i.no;
+        if (typeof i.note === 'string' && i.note) o.note = i.note.slice(0, 300);
+        if (typeof i.address === 'string' && i.address) o.address = i.address.slice(0, 200);
+        return o;
+      });
     if (!items.length) { toast('中身がありませんでした'); return; }
     const list = await customCollections();
     const dup = list.find((x) => x.name === c.name);
