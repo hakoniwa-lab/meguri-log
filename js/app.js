@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v57';
+  const APP_VERSION = 'v58';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -1739,9 +1739,19 @@
       },
       (err) => {
         restore();
-        toast(err.code === 1
-          ? '位置情報の利用が許可されていません。ブラウザの設定から許可してください'
-          : '現在地を取得できませんでした');
+        if (err.code === 1) {
+          // ★「ブラウザの設定から」だけでは直せない人がいた★
+          // iPhone/iPadは設定が3か所あり、どこを見ればいいかが分からない。
+          // 手順は「使い方 → よくある質問」に置き、ここからそこへ飛ばす。
+          toast(isIOS()
+            ? '位置情報が拒否されています。iPhone/iPadは設定が3か所あります。'
+              + '「設定」タブ →「使い方」→「よくある質問」に手順を書きました'
+            : '位置情報の利用が許可されていません。ブラウザの設定から許可してください',
+            isIOS() ? 9000 : undefined);
+          return;
+        }
+        toast(err.code === 3 ? '現在地の取得に時間がかかりすぎました。空の見える場所でもう一度'
+                             : '現在地を取得できませんでした');
       },
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
     );
@@ -5063,12 +5073,13 @@
   }
 
   // ---------------------------------------------------------------
-  function toast(msg) {
+  function toast(msg, ms) {
     const t = $('#toast');
     t.textContent = msg;
     t.classList.add('is-on');
     clearTimeout(toast._timer);
-    toast._timer = setTimeout(() => t.classList.remove('is-on'), 2600);
+    // 長い案内（位置情報の設定手順など）は 2.6秒では読み切れないので、指定があれば延ばす
+    toast._timer = setTimeout(() => t.classList.remove('is-on'), ms || 2600);
   }
 
   window.addEventListener('DOMContentLoaded', () => {

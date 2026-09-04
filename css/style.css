@@ -847,3 +847,17 @@ a{color:var(--navy)}
 }
 .cgroup--btn.is-folded .cgroup__caret{transform:rotate(0deg)}
 .cgroup__body{margin-bottom:4px}
+
+/* よくある質問。質問だけ並べ、押した分だけ開く */
+.qa{border-top:1px solid var(--line); padding:2px 0}
+.qa summary{
+  cursor:pointer; padding:10px 2px; font-size:14px; font-weight:700; color:var(--navy);
+  list-style:none; display:flex; gap:8px; align-items:flex-start;
+}
+.qa summary::-webkit-details-marker{display:none}
+.qa summary::before{content:'Q'; flex:0 0 auto; color:var(--amber); font-weight:900}
+.qa[open] summary::before{content:'A'}
+.qa p, .qa ol{margin:0 0 10px 22px; font-size:13.5px; line-height:1.75}
+.qa ol{padding-left:18px}
+.qa li{margin-bottom:6px}
+.qa code{background:var(--bg); padding:1px 5px; border-radius:5px; font-size:12.5px}
