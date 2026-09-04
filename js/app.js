@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v54';
+  const APP_VERSION = 'v55';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -313,7 +313,7 @@
         state.trackLineOn = !state.trackLineOn;
         setToggle('#btn-track-line', state.trackLineOn);
         await Store.setMeta('trackLineOn', state.trackLineOn);
-        drawTrack();
+        renderDayLines();                     // チップの出し入れも含めて描き直す
         if (state.trackLineOn && !state.track.length) toast('通った道はまだ記録されていません');
       });
     }
@@ -521,8 +521,7 @@
   function refreshMap() {
     if (state.layer) state.layer.setStyle(styleFor);
     renderPins();
-    renderDayLines();
-    drawTrack();
+    renderDayLines();                         // 通った道もこの中で描く
   }
 
   // 移動の線。同じ日に記録した地点を、記録した順に結ぶ。
@@ -531,7 +530,7 @@
   async function renderDayLines() {
     if (!state.map) return;
     if (state.lines) { state.map.removeLayer(state.lines); state.lines = null; }
-    if (!state.linesOn) { const b = $('#line-days'); if (b) b.hidden = true; return; }
+    // ★線がオフでもここで帰らない★ 日付のチップは「通った道」も使う
 
     const all = await Store.getAllVisits();
     const byDay = new Map();
@@ -543,11 +542,12 @@
       byDay.get(d).push(v);
     }
 
-    // 線になる日（2か所以上）を新しい順に並べ、切り替えのチップを作る
-    const dayList = Array.from(byDay.entries())
+    // 線になる日（2か所以上）と、通った道が残っている日を合わせ、新しい順に並べる
+    const days = new Set(Array.from(byDay.entries())
       .filter(function (e) { return e[1].length >= 2; })
-      .map(function (e) { return e[0]; })
-      .sort(function (a, b) { return b.localeCompare(a); });
+      .map(function (e) { return e[0]; }));
+    for (const d of trackDays()) days.add(d);
+    const dayList = Array.from(days).sort(function (a, b) { return b.localeCompare(a); });
 
     // 何日分も重なると「その日どこを回ったか」が読めないので、既定は最新の1日だけ。
     // 自分で日を選ぶまでは最新の日に追従する（開いたまま今日の記録を足しても線が出るように）。
@@ -556,6 +556,8 @@
       else if (state.lineDay && !dayList.includes(state.lineDay)) state.lineDay = dayList[0];
     }
     buildLineDayChips(dayList);
+    drawTrack();                              // 選ばれた日に合わせて描き直す
+    if (!state.linesOn) return;
 
     const group = L.layerGroup();
     let drawn = 0;
@@ -1393,7 +1395,7 @@
     // 以前はここを「中身が変わったときだけ」書いていたため、線を一度消して
     // もう一度出すと、日付は同じままなので早く帰ってしまい、
     // チップが隠れたきり戻らなかった。
-    box.hidden = !state.linesOn || !days.length;
+    box.hidden = !(state.linesOn || state.trackLineOn) || !days.length;
     if (cur === key) {                       // 中身が同じなら選択状態だけ更新
       $$('#line-days .ldchip').forEach(function (b) {
         b.classList.toggle('is-on', (b.dataset.day || '__all__') === (state.lineDay || '__all__'));
@@ -3347,10 +3349,25 @@
   }
 
   // 線を切るところで区切る。アプリを閉じていた間を1本の直線でつながないため。
-  function trackSegments() {
+  // 時刻（ms）→ その端末の日付 YYYY-MM-DD。
+  // ★toISOString は使わない★ UTCなので朝9時前が前日になる（2つのアプリで踏んだ）
+  function dayOfMs(t) {
+    const d = new Date(t);
+    const z = (n) => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + z(d.getMonth() + 1) + '-' + z(d.getDate());
+  }
+
+  // 通った道が残っている日。記録が1つも無い日でも、走っていれば並ぶ
+  function trackDays() {
+    const out = new Set();
+    for (const p of state.track) out.add(dayOfMs(p[2]));
+    return out;
+  }
+
+  function trackSegments(points) {
     const segs = [];
     let cur = [];
-    for (const p of state.track) {
+    for (const p of points) {
       if (cur.length) {
         const q = cur[cur.length - 1];
         if ((p[2] - q[2]) > TRACK_GAP_MS || distMeters(q[0], q[1], p[0], p[1]) > TRACK_GAP_M) {
@@ -3367,8 +3384,13 @@
     if (!state.map) return;
     if (state.trackLayer) { state.map.removeLayer(state.trackLayer); state.trackLayer = null; }
     if (!state.trackLineOn || state.track.length < 2) return;
+    // ★「その日の移動の線」と同じ日付の切り替えに従う★
+    // 何日分も重なると、どれが今日の道か読めない。
+    const pts = state.lineDay
+      ? state.track.filter((p) => dayOfMs(p[2]) === state.lineDay)
+      : state.track;
     const g = L.layerGroup();
-    for (const sg of trackSegments()) {
+    for (const sg of trackSegments(pts)) {
       const pts = sg.map((p) => [p[0], p[1]]);
       // 白を下に敷く。濃い地図でも薄い地図でも線が見えるように
       L.polyline(pts, { color: '#fff', weight: 7, opacity: .7,
@@ -3443,7 +3465,9 @@
         state.track.splice(0, state.track.length - TRACK_MAX_PTS);
       }
       saveTrackSoon();
-      drawTrack();
+      // 日付をまたいだら今日のチップが要る。自分で日を選んでいる間は触らない
+      if (!state.lineDayPicked && state.lineDay !== dayOfMs(Date.now())) renderDayLines();
+      else drawTrack();
     }
 
     // 同じ場所に留まっている間は市区町村の判定をしない
