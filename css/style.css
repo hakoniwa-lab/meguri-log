@@ -931,3 +931,74 @@ a{color:var(--navy)}
 .pinmove__cross::after{content:''; position:absolute; background:#e02c2c}
 .pinmove__cross::before{left:50%; top:0; width:2px; height:100%; margin-left:-1px}
 .pinmove__cross::after{top:50%; left:0; height:2px; width:100%; margin-top:-1px}
+
+/* 写真ごとの御朱印 */
+.preview__gs{
+  position:absolute; right:2px; bottom:2px; width:22px; height:22px; border-radius:6px;
+  border:1px solid var(--line); background:rgba(255,255,255,.92); color:var(--muted);
+  font-size:11px; font-weight:700; line-height:1; cursor:pointer; padding:0;
+}
+.preview__gs.is-on{background:var(--amber); color:#fff; border-color:var(--amber)}
+.gsphoto{position:fixed; inset:0; z-index:2600; display:flex; align-items:flex-end}
+.gsphoto__backdrop{position:absolute; inset:0; background:rgba(20,24,32,.45)}
+.gsphoto__body{
+  position:relative; width:100%; max-height:88vh; overflow-y:auto; background:#fff;
+  border-radius:18px 18px 0 0; padding:16px 16px calc(20px + env(safe-area-inset-bottom));
+}
+.gsphoto__body>img{
+  display:block; width:100%; max-height:34vh; object-fit:contain;
+  background:var(--bg); border-radius:10px; margin:8px 0;
+}
+.gsphoto__is{font-weight:700}
+@media (min-width:640px){
+  .gsphoto{align-items:center; justify-content:center}
+  .gsphoto__body{max-width:520px; border-radius:18px}
+}
+
+/* 御朱印の一覧 */
+.gsgrid{display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px; padding:0 12px 16px}
+.gscard{
+  display:flex; flex-direction:column; gap:6px; padding:8px; text-align:left;
+  background:#fff; border:1px solid var(--line); border-radius:12px; font:inherit; cursor:pointer;
+}
+.gscard__img{
+  display:block; width:100%; aspect-ratio:3/4; background:var(--bg); border-radius:8px;
+  overflow:hidden; position:relative;
+}
+.gscard__img img{width:100%; height:100%; object-fit:cover; display:block}
+.gscard__img.is-none{
+  display:flex; align-items:center; justify-content:center;
+  color:var(--muted); font-size:11.5px;
+}
+.gscard__b b{display:block; font-size:13.5px; line-height:1.4}
+.gscard__b small{display:block; color:var(--muted); font-size:11.5px; margin-top:2px; line-height:1.5}
+
+/* 見るだけの画面の写真に説明を添える */
+.vshot{display:block}
+.vshot small{display:block; color:var(--muted); font-size:11.5px; margin-top:3px}
+
+/* 写真の下にファイル名。長い名前で行が崩れないよう1行に切る */
+.preview__wrap{width:74px}
+.preview__name{
+  display:block; width:74px; margin-top:3px; font-size:10.5px; color:var(--muted);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+
+/* まとめて印を付ける */
+.gspickbar{
+  display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+  padding:8px 10px; margin:8px 0; border:1px solid var(--amber);
+  background:#fff8ec; border-radius:10px; font-size:12.5px;
+}
+.gspickbar span{flex:1 1 auto; font-weight:700; color:var(--navy)}
+#btn-gspick.is-on{background:var(--navy); color:#fff; border-color:var(--navy)}
+.preview__item.is-picking{cursor:pointer}
+.preview__item.is-picking::after{
+  content:''; position:absolute; inset:0; border:2px solid transparent; border-radius:8px;
+}
+.preview__item.is-picked::after{border-color:var(--amber); background:rgba(232,163,61,.22)}
+.preview__item.is-picked::before{
+  content:'\2713'; position:absolute; right:3px; top:2px; z-index:2;
+  color:#fff; background:var(--amber); width:18px; height:18px; border-radius:50%;
+  font-size:12px; line-height:18px; text-align:center;
+}

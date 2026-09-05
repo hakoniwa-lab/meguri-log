@@ -135,8 +135,11 @@ const Store = (() => {
     },
 
     // ---- 写真 ----
-    async putPhoto(blob) {
+    // name … 元のファイル名。★どの写真か見分ける手がかりになる★
+    // クラウドから入れると「御朱印_浅草寺.jpg」のように中身が名前に入っていることが多い。
+    async putPhoto(blob, name) {
       const rec = { id: newId('p'), blob, size: blob.size, type: blob.type };
+      if (name) rec.name = String(name).slice(0, 120);
       const t = tx(['photos'], 'readwrite');
       await reqToPromise(t.objectStore('photos').put(rec));
       return rec.id;

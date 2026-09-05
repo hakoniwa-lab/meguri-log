@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v70';
+  const APP_VERSION = 'v71';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -183,6 +183,9 @@
     lastPlace: null,    // 同じ地点の前回の場所情報（引き継ぎ用）
     histMode: 'visits', // 記録タブの表示（visits / chome / year / stats）
     histYear: '',       // 1年ごとで見ている年
+    gsFilter: {},       // 御朱印一覧の絞り込み
+    gsEditing: null,    // 写真ごとの御朱印を編集中の位置（数値=1枚 / 配列=まとめて）
+    gsPick: null,       // まとめて選んでいる最中の写真の番号
     histShown: 0,
     viewing: null,     // 見るだけの画面に出している記録
     sheetOnly: null,   // 記録シートで1件だけ出しているときの id
@@ -1965,13 +1968,24 @@
     const shots = document.createElement('div');
     shots.className = 'vshots';
     box.appendChild(shots);
+    const gmap = v.gsPhotos || {};
     for (const pid of (v.photoIds || [])) {
       const ph = await Store.getPhoto(pid);
       if (!ph) continue;
+      const cell = document.createElement('div');
+      cell.className = 'vshot';
       const img = document.createElement('img');
       img.src = URL.createObjectURL(ph.blob);
       img.alt = '';
-      shots.appendChild(img);
+      cell.appendChild(img);
+      // どれが御朱印かを写真の下に書く。見返したときに区別がつかないため
+      const capText = gmap[pid] ? gsLabel(gmap[pid]) : (ph.name || '');
+      if (capText) {
+        const cap = document.createElement('small');
+        cap.textContent = capText;
+        cell.appendChild(cap);
+      }
+      shots.appendChild(cell);
     }
 
     $('#viewer').classList.add('is-open');
@@ -2209,10 +2223,134 @@
     }
   }
 
+
+
+  // ★何枚もまとめて同じ印を付ける★
+  // クラウドに溜めた御朱印を一度に入れると、1枚ずつ開いて選ぶのは現実的でない。
+  // 「直書き・通常の御朱印」が20枚、のような並びになることが多いので、まとめて付けられるようにする。
+  function setGsPick(on) {
+    state.gsPick = on ? new Set() : null;
+    const bar = $('#gspick-bar');
+    if (bar) bar.hidden = !on;
+    const b = $('#btn-gspick');
+    if (b) b.classList.toggle('is-on', !!on);
+    renderPending();
+    syncGsPickCount();
+  }
+
+  function syncGsPickCount() {
+    const el = $('#gspick-count');
+    if (!el) return;
+    const n = state.gsPick ? state.gsPick.size : 0;
+    el.textContent = n + '枚を選んでいます';
+    const go = $('#gspick-go');
+    if (go) go.disabled = !n;
+  }
+
+  function toggleGsPick(i) {
+    if (!state.gsPick) return;
+    if (state.gsPick.has(i)) state.gsPick.delete(i); else state.gsPick.add(i);
+    renderPending();
+    syncGsPickCount();
+  }
+
+  // ★御朱印は写真1枚ずつに付ける★
+  // これまでは記録に1つだけだった。だが1回の参拝で2体いただくことがあるし、
+  // 境内の写真と御朱印の写真が同じ扱いなので、あとから御朱印だけを見返せなかった。
+  // 記録全体の欄（visit.goshuin）は古い記録のために残し、
+  // 写真ごとの分は visit.gsPhotos = { 写真のid: {kind,name,write,form,limited} } に持つ。
+  function gsLabel(g) {
+    if (!g) return '';
+    return [gsKindOf(g), g.name, g.write, g.form, g.limited ? '限定' : '']
+      .filter(Boolean).join(' ・ ');
+  }
+
+  // 記録が持っている御朱印を、写真ごとの分と記録全体の分の両方から集める
+  function goshuinOf(v) {
+    const out = [];
+    const map = v.gsPhotos || {};
+    for (const pid of (v.photoIds || [])) {
+      if (map[pid]) out.push({ photoId: pid, g: map[pid], v: v });
+    }
+    // ★古い記録を落とさない★ 写真に印が付いていなくても、記録全体の欄があれば1体として数える
+    if (v.goshuin) out.push({ photoId: null, g: v.goshuin, v: v });
+    return out;
+  }
+
+  // i が数値なら1枚、配列ならまとめて。
+  // ★まとめてのときは代表の1枚だけを見せる★ 全部並べても選ぶ内容は同じで、画面が長くなるだけ。
+  function openGsPhoto(i) {
+    const many = Array.isArray(i);
+    const idx = many ? i[0] : i;
+    const p = state.pending[idx];
+    if (!p) return;
+    state.gsEditing = i;
+    $('#gsphoto-title').textContent = many
+      ? '選んだ ' + i.length + ' 枚の御朱印' : 'この写真の御朱印';
+    $('#gsphoto-on').parentElement.querySelector('span').textContent = many
+      ? 'これらの写真は御朱印・御城印などである'
+      : 'この写真は御朱印・御城印などである';
+    const img = $('#gsphoto-img');
+    if (img.src.startsWith('blob:')) URL.revokeObjectURL(img.src);
+    img.src = URL.createObjectURL(p.blob);
+    const nm = $('#gsphoto-name');
+    const label = many ? (i.length + ' 枚に同じ内容を付けます') : (p.name || '');
+    if (nm) { nm.textContent = label; nm.hidden = !label; }
+    const g = p.gs || null;
+    $('#gsphoto-on').checked = !!g;
+    $('#gsphoto-fields').hidden = !g;
+    $('#gp-name').value = (g && g.name) || '';
+    $('#gp-limited').checked = !!(g && g.limited);
+    $$('#gp-kind .day').forEach((b) => b.classList.toggle('is-on', b.dataset.v === gsKindOf(g)));
+    $$('#gp-write .day').forEach((b) => b.classList.toggle('is-on', !!g && b.dataset.v === g.write));
+    $$('#gp-form .day').forEach((b) => b.classList.toggle('is-on', !!g && b.dataset.v === g.form));
+    $('#gsphoto').hidden = false;
+  }
+
+  function closeGsPhoto() {
+    const img = $('#gsphoto-img');
+    if (img.src.startsWith('blob:')) URL.revokeObjectURL(img.src);
+    img.removeAttribute('src');
+    $('#gsphoto').hidden = true;
+    state.gsEditing = null;
+  }
+
+  function commitGsPhoto() {
+    const i = state.gsEditing;
+    if (i === null || i === undefined) { closeGsPhoto(); return; }
+    const list = (Array.isArray(i) ? i : [i]).map((n) => state.pending[n]).filter(Boolean);
+    if (!list.length) { closeGsPhoto(); return; }
+    let g = null;
+    if ($('#gsphoto-on').checked) {
+      const k = $('#gp-kind .day.is-on');
+      const w = $('#gp-write .day.is-on');
+      const f = $('#gp-form .day.is-on');
+      g = {
+        kind: k ? k.dataset.v : GS_KIND[0],
+        name: $('#gp-name').value.trim(),
+        write: w ? w.dataset.v : '',
+        form: f ? f.dataset.v : '',
+        limited: $('#gp-limited').checked,
+      };
+    }
+    for (const p of list) {
+      // ★同じ内容を配り回さない★ 1つの物を共有すると、あとで1枚直すと全部変わる
+      if (g) p.gs = Object.assign({}, g); else delete p.gs;
+    }
+    const n = list.length;
+    closeGsPhoto();
+    if (state.gsPick) setGsPick(false); else renderPending();
+    if (n > 1) toast(n + ' 枚に付けました');
+  }
+
   // ---- 添付写真（保存前の一時置き場）----
   function clearPending() {
     state.pending.forEach((p) => URL.revokeObjectURL(p.url));
     state.pending = [];
+    // ★別の記録に移ったら選択は捨てる★ 番号で覚えているので、持ち越すと別の写真を指す
+    state.gsPick = null;
+    const pb = $('#gspick-bar'); if (pb) pb.hidden = true;
+    const pbtn = $('#btn-gspick'); if (pbtn) pbtn.classList.remove('is-on');
     state.editing = null;
     const bar = $('#edit-bar'); if (bar) bar.classList.remove('is-on');
     const sv = $('#visit-save'); if (sv) sv.textContent = 'この訪問を記録する';
@@ -2226,6 +2364,8 @@
     if (!box) return;
     box.innerHTML = '';
     state.pending.forEach((p, i) => {
+      const wrap = document.createElement('div');
+      wrap.className = 'preview__wrap';
       const cell = document.createElement('div');
       cell.className = 'preview__item';
       const img = document.createElement('img');
@@ -2242,7 +2382,35 @@
       });
       cell.appendChild(img);
       cell.appendChild(del);
-      box.appendChild(cell);
+
+      // 写真ごとの御朱印。押すとその1枚だけの内容を決める
+      const gs = document.createElement('button');
+      gs.type = 'button';
+      gs.className = 'preview__gs' + (p.gs ? ' is-on' : '');
+      gs.textContent = '印';
+      gs.title = p.gs ? gsLabel(p.gs) : 'この写真の御朱印を決める';
+      gs.addEventListener('click', () => openGsPhoto(i));
+      cell.appendChild(gs);
+
+      // まとめて選ぶ間は、写真そのものを押して選ぶ（×と印は邪魔になるので隠す）
+      if (state.gsPick) {
+        cell.classList.add('is-picking');
+        if (state.gsPick.has(i)) cell.classList.add('is-picked');
+        del.hidden = true;
+        gs.hidden = true;
+        cell.addEventListener('click', () => toggleGsPick(i));
+      }
+
+      wrap.appendChild(cell);
+      // ★ファイル名を出す★ 縮小した画像は見た目が似ていて、どれがどれか分からない
+      if (p.name) {
+        const nm = document.createElement('small');
+        nm.className = 'preview__name';
+        nm.textContent = p.name;
+        nm.title = p.name;
+        wrap.appendChild(nm);
+      }
+      box.appendChild(wrap);
     });
   }
 
@@ -2268,7 +2436,11 @@
     for (const pid of (visit.photoIds || [])) {
       const ph = await Store.getPhoto(pid);
       if (!ph) continue;
-      state.pending.push({ blob: ph.blob, url: URL.createObjectURL(ph.blob), existingId: pid });
+      const item = { blob: ph.blob, url: URL.createObjectURL(ph.blob), existingId: pid,
+        name: ph.name || '' };
+      const gmap = visit.gsPhotos || {};
+      if (gmap[pid]) item.gs = gmap[pid];
+      state.pending.push(item);
     }
     renderPending();
 
@@ -2300,7 +2472,8 @@
       // 何も起きないと「壊れた」と読まれる。
       if (!f || !f.type.startsWith('image/')) { if (f) skipped++; continue; }
       const blob = await shrinkImage(f, 1600, 0.82);
-      state.pending.push({ blob, url: URL.createObjectURL(blob) });
+      // ★元のファイル名を残す★ 縮小すると別のBlobになるので、ここで拾わないと消える
+      state.pending.push({ blob, url: URL.createObjectURL(blob), name: f.name || '' });
     }
     renderPending();
     if (skipped) toast(skipped + ' 件は画像ではないので入れませんでした');
@@ -2395,6 +2568,41 @@
     mkPicker('#gs-kind', GS_KIND);
     mkPicker('#gs-write', GS_WRITE);
     mkPicker('#gs-form', GS_FORM);
+    mkPicker('#gp-kind', GS_KIND);
+    mkPicker('#gp-write', GS_WRITE);
+    mkPicker('#gp-form', GS_FORM);
+    const gpOn = $('#gsphoto-on');
+    if (gpOn) gpOn.addEventListener('change', () => {
+      $('#gsphoto-fields').hidden = !gpOn.checked;
+      // 入れたばかりで種類が未選択なら「御朱印」を選んでおく（毎回押させない）
+      if (gpOn.checked && !$('#gp-kind .day.is-on')) {
+        const first = $('#gp-kind .day');
+        if (first) first.classList.add('is-on');
+      }
+    });
+    const gpc = $('#gsphoto-close');
+    if (gpc) gpc.addEventListener('click', closeGsPhoto);
+    const gpb = $('#gsphoto-backdrop');
+    if (gpb) gpb.addEventListener('click', closeGsPhoto);
+    const gpo = $('#gsphoto-ok');
+    if (gpo) gpo.addEventListener('click', commitGsPhoto);
+    const bp = $('#btn-gspick');
+    if (bp) bp.addEventListener('click', () => setGsPick(!state.gsPick));
+    const poff = $('#gspick-off');
+    if (poff) poff.addEventListener('click', () => setGsPick(false));
+    const pall = $('#gspick-all');
+    if (pall) pall.addEventListener('click', () => {
+      if (!state.gsPick) return;
+      const all = state.gsPick.size === state.pending.length;
+      state.gsPick = new Set(all ? [] : state.pending.map((_x, i) => i));
+      renderPending();
+      syncGsPickCount();
+    });
+    const pgo = $('#gspick-go');
+    if (pgo) pgo.addEventListener('click', () => {
+      if (!state.gsPick || !state.gsPick.size) return;
+      openGsPhoto(Array.from(state.gsPick).sort((a, b) => a - b));
+    });
 
     const gt = $('#goshuin-toggle');
     if (gt) {
@@ -2597,8 +2805,13 @@
 
       // 既存写真は元のIDを使い回し、新しく足したものだけ保存する
       const photoIds = [];
+      const gsPhotos = {};
       for (const p of state.pending) {
-        photoIds.push(p.existingId || await Store.putPhoto(p.blob));
+        // ★写真のidは保存して初めて決まる★ 入力中は state.pending の並びでしか指せないので、
+        // 保存したこの場で「写真のid → 御朱印」に付け替える。
+        const pid = p.existingId || await Store.putPhoto(p.blob, p.name);
+        photoIds.push(pid);
+        if (p.gs) gsPhotos[pid] = p.gs;
       }
 
       if (state.editing) {
@@ -2619,6 +2832,7 @@
           place: getPlace(),
           goshuin: getGoshuin(),
           photoIds,
+          gsPhotos,
           // ★位置を直したら書き戻す★ 触っていなければ元のまま
           coords: (sel && sel.coords) ? sel.coords : v.coords,
           address: (sel && sel.address) ? sel.address : v.address,
@@ -2639,6 +2853,7 @@
           athome: $('#visit-athome').checked,
           place: getPlace(),
           goshuin: getGoshuin(),
+          gsPhotos,
           coords: sel.coords,
           address: sel.address,
           photoIds,
@@ -2890,6 +3105,7 @@
     const all = await Store.getAllVisits();
 
     if (state.histMode === 'chome') { renderChomeList(box, all); return; }
+    if (state.histMode === 'gs') { renderGoshuinList(box, all); return; }
     if (state.histMode === 'year') { renderYear(box, all); return; }
     if (state.histMode === 'stats') { renderStats(box, all); return; }
 
@@ -3210,6 +3426,104 @@
   // ★新しく行った、は記録そのものから出す★
   // 記録には category（pref / city）と spotId が入っているので、
   // その spotId を最初に記録した年がその年なら「今年が初めて」。地図の判定は要らない。
+
+  // ★御朱印だけを見返せるようにする★
+  // これまでは訪れた記録の中に埋もれていて、「直書きの見開きだけ見たい」ができなかった。
+  async function renderGoshuinList(box, all) {
+    $('#hist-summary').textContent = '';
+    box.innerHTML = '';
+    const rows = [];
+    for (const v of all) for (const e of goshuinOf(v)) rows.push(e);
+    if (!rows.length) {
+      box.innerHTML = '<p class="muted" style="padding:12px">まだ御朱印の記録がありません。'
+        + '記録画面の「御朱印・御城印など」か、写真の「印」から付けられます。</p>';
+      return;
+    }
+    rows.sort((a, b) => (b.v.visitedAt || '').localeCompare(a.v.visitedAt || ''));
+
+    // 絞り込みは「今あるものだけ」出す。0件の条件を並べても押せないだけで邪魔になる
+    const f = state.gsFilter || {};
+    const has = (key, val) => rows.some((r) => gsFieldOf(r.g, key) === val);
+    const chips = document.createElement('div');
+    chips.className = 'nearchips';
+    const mk = (key, val, label) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      const on = f[key] === val;
+      b.className = 'nearchip' + (on ? ' is-on' : '');
+      b.textContent = label;
+      b.addEventListener('click', () => {
+        const next = Object.assign({}, f);
+        if (on) delete next[key]; else next[key] = val;
+        state.gsFilter = next;
+        renderHistory(true);
+      });
+      return b;
+    };
+    for (const k of GS_KIND) if (has('kind', k)) chips.appendChild(mk('kind', k, k));
+    for (const w of GS_WRITE) if (has('write', w)) chips.appendChild(mk('write', w, w));
+    for (const fm of GS_FORM) if (has('form', fm)) chips.appendChild(mk('form', fm, fm));
+    if (rows.some((r) => r.g.limited)) chips.appendChild(mk('limited', true, '限定'));
+    box.appendChild(chips);
+
+    const q = ($('#hist-filter').value || '').trim().toLowerCase();
+    const hit = rows.filter((r) => {
+      for (const k of Object.keys(f)) {
+        if (k === 'limited') { if (!r.g.limited) return false; continue; }
+        if (gsFieldOf(r.g, k) !== f[k]) return false;
+      }
+      if (!q) return true;
+      const t = [r.g.name, gsKindOf(r.g), (r.v.place && r.v.place.name) || '', r.v.name || '',
+        r.v.memo || ''].join(' ').toLowerCase();
+      return t.indexOf(q) >= 0;
+    });
+
+    const head = document.createElement('p');
+    head.className = 'muted';
+    head.style.padding = '0 12px 6px';
+    head.textContent = hit.length + ' 体'
+      + (hit.length !== rows.length ? '（ぜんぶで ' + rows.length + ' 体）' : '')
+      + '。押すとその記録が開きます。';
+    box.appendChild(head);
+
+    const grid = document.createElement('div');
+    grid.className = 'gsgrid';
+    box.appendChild(grid);
+    for (const r of hit.slice(0, 300)) {
+      const cell = document.createElement('button');
+      cell.type = 'button';
+      cell.className = 'gscard';
+      const where = (r.v.place && r.v.place.name) || r.v.name || '';
+      cell.innerHTML = '<span class="gscard__img"></span>'
+        + '<span class="gscard__b"><b>' + escapeHtml(r.g.name || gsKindOf(r.g)) + '</b>'
+        + '<small>' + escapeHtml(gsLabel(r.g)) + '</small>'
+        + '<small>' + escapeHtml(where) + '　' + escapeHtml(r.v.visitedAt || '') + '</small></span>';
+      cell.addEventListener('click', () => openVisitViewer(r.v));
+      grid.appendChild(cell);
+      // 写真は後から差し込む。並べ終わるのを待たせない
+      if (r.photoId) {
+        Store.getPhoto(r.photoId).then((ph) => {
+          if (!ph) return;
+          const im = document.createElement('img');
+          im.src = URL.createObjectURL(ph.blob);
+          im.alt = '';
+          const holder = cell.querySelector('.gscard__img');
+          if (holder) holder.appendChild(im);
+        });
+      } else {
+        // ★写真が無いことを黙って空欄にしない★ 古い記録は写真に印が付いていない
+        const holder = cell.querySelector('.gscard__img');
+        holder.classList.add('is-none');
+        holder.textContent = '写真なし';
+      }
+    }
+  }
+
+  function gsFieldOf(g, key) {
+    if (key === 'kind') return gsKindOf(g);
+    return g[key] || '';
+  }
+
   function renderYear(box, all) {
     $('#hist-summary').textContent = '';
     box.innerHTML = '';
@@ -3329,8 +3643,9 @@
       .map((e) => [e[0], e[1] + ' 回']));
 
     // 御朱印・お金
-    const gs = mine.filter((v) => v.goshuin);
-    if (gs.length) card('御朱印・御城印など', [['いただいた数', gs.length + ' 体']]);
+    let gsN = 0;
+    mine.forEach((v) => { gsN += goshuinOf(v).length; });
+    if (gsN) card('御朱印・御城印など', [['いただいた数', gsN + ' 体']]);
     const spent = mine.reduce((n, v) => n + (Number(v.amount) || 0), 0);
     if (spent > 0) {
       const home = mine.reduce((n, v) => n + (v.athome ? (Number(v.amount) || 0) : 0), 0);
@@ -3430,24 +3745,25 @@
       card('使ったお金', rows);
     }
 
-    // 御朱印
-    const gs = all.filter(function (v) { return v.goshuin; });
+    // 御朱印。★写真ごとに付けた分も数える★ 記録全体の欄だけを見ると少なく出る
+    const gs = [];
+    all.forEach(function (v) { goshuinOf(v).forEach(function (e) { gs.push(e.g); }); });
     if (gs.length) {
       const cnt = function (pred) { return gs.filter(pred).length; };
       const rows = [['いただいた数', gs.length + ' 体']];
       GS_KIND.forEach(function (k) {
-        const n = cnt(function (v) { return gsKindOf(v.goshuin) === k; });
+        const n = cnt(function (g) { return gsKindOf(g) === k; });
         if (n) rows.push([k, n + ' 体']);
       });
       GS_WRITE.forEach(function (w) {
-        const n = cnt(function (v) { return v.goshuin.write === w; });
+        const n = cnt(function (g) { return g.write === w; });
         if (n) rows.push([w, n + ' 体']);
       });
       GS_FORM.forEach(function (f) {
-        const n = cnt(function (v) { return v.goshuin.form === f; });
+        const n = cnt(function (g) { return g.form === f; });
         if (n) rows.push([f, n + ' 体']);
       });
-      const lim = cnt(function (v) { return v.goshuin.limited; });
+      const lim = cnt(function (g) { return g.limited; });
       if (lim) rows.push(['限定', lim + ' 体']);
       card('御朱印・御城印など', rows);
     }
@@ -3498,6 +3814,8 @@
         if (only) only.style.display = (state.histMode === 'visits') ? '' : 'none';
         const fil = $('#hist-filter');
         if (fil) fil.style.display = (state.histMode === 'stats' || state.histMode === 'year') ? 'none' : '';
+        if (fil) fil.placeholder = (state.histMode === 'gs')
+          ? '御朱印の名前・場所で探す' : '地名・メモで探す';
         renderHistory(true);
       });
     });

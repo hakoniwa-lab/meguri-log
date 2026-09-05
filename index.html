@@ -112,6 +112,7 @@
     <div class="regions" id="hist-modes">
       <button class="rgbtn is-active" data-hmode="visits">訪れた記録</button>
       <button class="rgbtn" data-hmode="chome">町丁目</button>
+      <button class="rgbtn" data-hmode="gs">御朱印</button>
       <button class="rgbtn" data-hmode="year">1年ごと</button>
       <button class="rgbtn" data-hmode="stats">まとめ</button>
     </div>
@@ -304,6 +305,17 @@
           （下の質問を見てください）。Chrome を入れると Chrome 側で改めて聞かれるので、それで動くことも確かめられます。</p>
       </details>
       <details class="qa">
+        <summary>御朱印の写真と、境内の写真が一緒くたになる</summary>
+        <p>写真1枚ずつに印を付けられます。記録画面で写真を足したあと、
+          <b>写真の右下の「印」</b>を押して「この写真は御朱印・御城印などである」にチェック。
+          種類・名称・直書き／書き置き・見開き・限定を、<b>その1枚だけ</b>に付けられます。</p>
+        <p>付けた御朱印は「記録」タブの<b>「御朱印」</b>で一覧になります。
+          直書きだけ、見開きだけ、限定だけ、といった絞り込みと、名前での検索ができます。</p>
+        <p class="muted">これまで通り記録全体に1つ付ける欄も残してあります（1回に1体だけのとき用）。
+          古い記録はそのまま一覧に出ますが、どの写真が御朱印かは分からないので写真なしで出ます。
+          編集で写真に付け直せます。</p>
+      </details>
+      <details class="qa">
         <summary>クラウド（iCloud・Google ドライブ）にある写真を入れたい</summary>
         <p>記録画面の<b>「クラウド・ファイルから」</b>を押してください。書類の選択画面が開き、
           iCloud Drive・Google ドライブ・Dropbox など、入れているアプリが並びます。</p>
@@ -490,6 +502,41 @@
 <!-- 位置を直す画面。★ピンを掴ませない★
      建物の中で取った位置は数十mずれる。小さなピンを指で掴ませると狙いが外れるので、
      十字は真ん中に固定して地図の方を動かしてもらう。 -->
+
+<!-- 写真1枚ごとの御朱印の情報。★境内の写真と御朱印が同じ扱いだった★
+     1回の参拝で御朱印を2体いただくこともあるので、記録に1つでは足りない。 -->
+<div id="gsphoto" class="gsphoto" hidden>
+  <div class="gsphoto__backdrop" id="gsphoto-backdrop"></div>
+  <div class="gsphoto__body">
+    <div class="sheet__head">
+      <h2 id="gsphoto-title">この写真の御朱印</h2>
+      <button type="button" id="gsphoto-close" class="iconbtn" aria-label="閉じる">×</button>
+    </div>
+    <img id="gsphoto-img" alt="">
+    <p class="muted" id="gsphoto-name" hidden></p>
+    <label class="check gsphoto__is">
+      <input type="checkbox" id="gsphoto-on"> <span>この写真は御朱印・御城印などである</span>
+    </label>
+    <div id="gsphoto-fields" hidden>
+      <div class="mini2"><small>種類</small>
+        <div class="days" id="gp-kind"></div></div>
+      <label class="mini2"><small>いただいたものの名称</small>
+        <input type="text" id="gp-name" placeholder="例: 御本尊、限定御朱印 など"></label>
+      <div class="mini2"><small>書き方</small>
+        <div class="days" id="gp-write"></div></div>
+      <div class="mini2"><small>形式</small>
+        <div class="days" id="gp-form"></div></div>
+      <label class="check">
+        <input type="checkbox" id="gp-limited"> 限定・期間限定
+      </label>
+    </div>
+    <div class="btns">
+      <button type="button" id="gsphoto-ok" class="btn">この内容にする</button>
+    </div>
+    <p class="muted">ここで付けた印は「記録」タブの<b>「御朱印」</b>から一覧で探せます。</p>
+  </div>
+</div>
+
 <div id="pinmove" class="pinmove" hidden>
   <div class="pinmove__bar">
     <button type="button" id="pinmove-cancel" class="linkbtn">やめる</button>
@@ -580,6 +627,9 @@
           <input type="checkbox" id="gs-limited"> 限定・期間限定
         </label>
         <p class="muted" style="margin:8px 0 0">初穂料は上の「使った金額」に入れてください。</p>
+        <p class="muted" style="margin:6px 0 0">★1回に2体以上いただいたとき★は、
+          ここではなく<b>写真1枚ずつ</b>に付けてください。
+          下の写真の右下にある「印」を押すと、その写真の分だけを決められます。</p>
       </div>
     </div>
 
@@ -623,11 +673,18 @@
         <button type="button" id="btn-camera" class="btn btn--sub">カメラで撮る</button>
         <button type="button" id="btn-library" class="btn btn--sub">写真から選ぶ</button>
         <button type="button" id="btn-files" class="btn btn--sub">クラウド・ファイルから</button>
+        <button type="button" id="btn-gspick" class="btn btn--sub btn--slim">まとめて印を付ける</button>
       </div>
       <input type="file" id="photo-camera" accept="image/*" capture="environment" hidden>
       <input type="file" id="photo-library" accept="image/*" multiple hidden>
       <!-- ★accept を付けない★ 付けると写真アプリだけが開き、クラウドが出ないことがある -->
       <input type="file" id="photo-files" multiple hidden>
+      <div class="gspickbar" id="gspick-bar" hidden>
+        <span id="gspick-count">0枚を選んでいます</span>
+        <button type="button" id="gspick-all" class="linkbtn">ぜんぶ</button>
+        <button type="button" id="gspick-go" class="btn btn--slim">印を付ける</button>
+        <button type="button" id="gspick-off" class="linkbtn">やめる</button>
+      </div>
       <div id="photo-preview" class="preview"></div>
     </div>
 
