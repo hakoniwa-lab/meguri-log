@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v61';
+  const APP_VERSION = 'v62';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -3662,6 +3662,14 @@
         if (same) return 'auto';
         continue;
       }
+      // ★近いものが密に並ぶリストは、距離で数えると巻き添えが出る★
+      // 配送先のリストは同じ工場の「4C荷受」「2D荷受」が数十m間隔で並ぶ。
+      // 400mでは1か所記録すると最大15件にチェックが付き、逆に狭くしても
+      // （20mでも）無くならない。距離をやめ、名前が一致したときだけ数える。
+      if (item.exact) {
+        if (same) return 'auto';
+        continue;
+      }
       if (v.coords && typeof v.coords.lat === 'number') {
         // ★名前は「距離をどこまで許すか」にだけ使う★
         // 以前は「片方の名前がもう片方に含まれていれば同じ場所」としていたが、
@@ -4404,6 +4412,7 @@
           if (i.no) o.no = i.no;
           if (i.note) o.note = i.note;          // 渡す相手にも同じメモが要る
           if (i.address) o.address = i.address;
+          if (i.exact) o.exact = true;
           return o;
         }),
       },
@@ -4453,6 +4462,7 @@
         if (i.no) o.no = i.no;
         if (typeof i.note === 'string' && i.note) o.note = i.note.slice(0, 300);
         if (typeof i.address === 'string' && i.address) o.address = i.address.slice(0, 200);
+        if (i.exact) o.exact = true;        // 近くの別の場所を巻き込まない印
         return o;
       });
     if (!items.length) { toast('中身がありませんでした'); return; }
