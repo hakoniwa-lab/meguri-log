@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v66';
+  const APP_VERSION = 'v67';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -3588,6 +3588,9 @@
     { id: 'taki100',    file: './data/collections/taki100.json' },
     { id: 'hyakumeizan', file: './data/collections/hyakumeizan.json' },
     { id: 'lighthouse50', file: './data/collections/lighthouse50.json' },
+    { id: 'dam',              file: './data/collections/dam.json' },
+    { id: 'onsen',            file: './data/collections/onsen.json' },
+    { id: 'airport',          file: './data/collections/airport.json' },
     { id: 'nisshu22',   file: './data/collections/nisshu22.json' },
     { id: 'ichinomiya', file: './data/collections/ichinomiya.json' },
     { id: 'shrine_hachiman',  file: './data/collections/shrine_hachiman.json' },
@@ -3622,6 +3625,16 @@
     { id: 'kamakura33',   file: './data/collections/kamakura33.json' },
     { id: 'edo33',        file: './data/collections/edo33.json' },
     { id: 'kamakura24', file: './data/collections/kamakura24.json' },
+    { id: 'temple_shingon',   file: './data/collections/temple_shingon.json' },
+    { id: 'temple_soto',      file: './data/collections/temple_soto.json' },
+    { id: 'temple_nichiren',  file: './data/collections/temple_nichiren.json' },
+    { id: 'temple_jodo',      file: './data/collections/temple_jodo.json' },
+    { id: 'temple_shinshu',   file: './data/collections/temple_shinshu.json' },
+    { id: 'temple_rinzai',    file: './data/collections/temple_rinzai.json' },
+    { id: 'temple_tendai',    file: './data/collections/temple_tendai.json' },
+    { id: 'temple_obaku',     file: './data/collections/temple_obaku.json' },
+    { id: 'temple_jishu',     file: './data/collections/temple_jishu.json' },
+    { id: 'temple_yuzu',      file: './data/collections/temple_yuzu.json' },
   ];
 
   // 「もう行った」と見なす距離。城や霊場は敷地が広く、入口で記録することも
@@ -4102,6 +4115,14 @@
       if (!bucket) { bucket = { name: g, cols: [] }; groups.push(bucket); }
       bucket.cols.push(c);
     }
+    // ★区分の並びを登録順まかせにしない★
+    // 登録の一覧は足した順に伸びていくので、新しいリストを足すたびに
+    // 区分が末尾に飛んだり順番が入れ替わったりする（寺の宗派が最後に出た）。
+    // 並びはここで決める。ここに無い区分は後ろにまわす。
+    const GROUP_ORDER = ['世界遺産', '城', '巡礼・霊場', '寺の宗派', '神社', '神社の系統',
+      'ご当地の御朱印めぐり', '自然', '道の駅・SA/PA', '三大・名所'];
+    const rank = (n) => { const i = GROUP_ORDER.indexOf(n); return i < 0 ? 999 : i; };
+    groups.sort((a, b) => rank(a.name) - rank(b.name));
     // ★35本を全部並べると探せない★ 見出しを押すと畳める。畳んだ見出しは端末に覚える
     const folded = new Set((await Store.getMeta('collectFold')) || []);
     for (const g of groups) {

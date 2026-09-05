@@ -5,7 +5,7 @@
    index.html / css / js / data を変更したら、必ず VERSION を上げること。
    上げないと、既に開いたことのある端末は古いキャッシュを返し続け、
    修正がいつまでも届かない（Service Workerは sw.js 自体が変わったときだけ再インストールされる）。 */
-const VERSION = 'v66';
+const VERSION = 'v67';
 const SHELL = 'meguri-shell-' + VERSION;
 const TILES = 'meguri-tiles-' + VERSION;
 const TILE_LIMIT = 400;
@@ -37,6 +37,8 @@ const COLLECTION_FILES = [
   'michinoeki', 'sapa', 'sanmeibaku', 'sanmeisen', 'yakei3', 'sandaiinari', 'kamakura33', 'edo33', 'kamakura24',
   'castle12', 'kokuho5', 'sanmeijo',
   'kanto88', 'musashino33',
+  'temple_shingon', 'temple_soto', 'temple_nichiren', 'temple_jodo', 'temple_shinshu', 'temple_rinzai', 'temple_tendai', 'temple_obaku', 'temple_jishu', 'temple_yuzu',
+  'dam', 'onsen', 'airport',
   'shrine_hachiman', 'shrine_inari', 'shrine_tenman', 'shrine_kumano', 'shrine_suwa', 'shrine_sengen', 'shrine_hie', 'shrine_kasuga', 'shrine_atago', 'shrine_hakusan', 'shrine_sumiyoshi', 'shrine_konpira',
 ].map((id) => './data/collections/' + id + '.json');
 
