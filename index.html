@@ -112,6 +112,7 @@
     <div class="regions" id="hist-modes">
       <button class="rgbtn is-active" data-hmode="visits">訪れた記録</button>
       <button class="rgbtn" data-hmode="chome">町丁目</button>
+      <button class="rgbtn" data-hmode="year">1年ごと</button>
       <button class="rgbtn" data-hmode="stats">まとめ</button>
     </div>
     <div class="filter">
@@ -130,6 +131,7 @@
   <section class="panel" id="panel-collect">
     <div id="collect-home">
       <p class="collect-lead">行った場所にチェックが入ります。<b>まだの場所</b>も地図で見られます。</p>
+      <button id="btn-collect-near" class="btn btn--sub btn--wide">📍 近くのまだ行っていない場所</button>
       <div id="collect-list" class="list"></div>
       <div class="collect-mine">
         <h3>自分のリスト</h3>
@@ -172,6 +174,23 @@
       <div id="st-list" class="list"></div>
     </div>
 
+
+
+    <!-- 近くのまだ行っていない場所。ドライブの途中で「この先に何かあるか」を見る用。 -->
+    <div id="collect-near" hidden>
+      <div class="cdet__head">
+        <button id="btn-near-back" class="linkbtn">← 一覧へ</button>
+      </div>
+      <h2 class="cdet__title">📍 近くのまだ行っていない場所</h2>
+      <p class="muted" id="near-note">現在地を調べています…</p>
+      <div class="stseg" id="near-seg">
+        <button type="button" class="stseg__b" data-km="3">3km</button>
+        <button type="button" class="stseg__b is-on" data-km="10">10km</button>
+        <button type="button" class="stseg__b" data-km="30">30km</button>
+      </div>
+      <div id="near-chips" class="nearchips"></div>
+      <div id="near-list" class="list"></div>
+    </div>
 
     <!-- 配られているリスト。同梱と違い、押した人だけが自分のリストとして持つ。 -->
     <div id="collect-catalog" hidden>
@@ -324,6 +343,19 @@
           回数と金額を、出かけた分と分けて数えます。制覇率には元から影響しません。</p>
       </details>
       <details class="qa">
+        <summary>お寺の宗派・神社の系統のリストに、近所のお寺（神社）が入っていない</summary>
+        <p>出典（Wikidata）に載っているものだけを入れているためです。<b>宗派が分かっているのは
+          日本のお寺の4分の1ほど</b>で、神社も記事のあるものだけです。<b>寺の名前からは宗派が分かりません</b>
+          （実際に測ったところ1.1%）ので、名前で補うこともできません。
+          無いものは、そのリストを開いて「場所を追加」で足せます。足した分は同梱データを直しても消えません。</p>
+      </details>
+      <details class="qa">
+        <summary>「近くのまだ行っていない場所」が同じリストばかりになる</summary>
+        <p>街なかだとお寺と稲荷神社で埋まります。上に出ているリスト名のボタンを押すと、
+          そのリストだけに絞れます。もう一度押すと元に戻ります。<b>鉄道駅は入りません</b>
+          （県ごとに分かれていて、開いた県のぶんしか手元に無いためです）。</p>
+      </details>
+      <details class="qa">
         <summary>集めるリストに「およその位置」と付いているものがある</summary>
         <p>資料に番地が無く、地図にも載っていない小さなお寺などです。市区町村の中心に置いてあるので、
           <b>近くを通ってもチェックは入りません</b>（名前が一致する記録があれば入ります）。</p>
@@ -430,6 +462,7 @@
         <li>配られているリストを増やす（いまは日本百観音だけ）</li>
         <li>知多四国霊場など、資料に座標が無くてまだ入れられていない霊場</li>
         <li>御朱印帳ごとの並べ替え（どの帳面に貼ったかで分ける）</li>
+        <li>1年のふりかえりを画像にして、そのまま人に見せられるようにする</li>
       </ul>
     </div>
   </section>

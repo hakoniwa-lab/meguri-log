@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v67';
+  const APP_VERSION = 'v68';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -159,6 +159,9 @@
     stPref: {},
     stMode: 'pref',
     colMode: 'pref',   // 道の駅・SA/PA の選ぶ画面（pref / road）
+    nearKm: 10,        // 近くのまだ行っていない場所（km）
+    nearOrigin: null,
+    nearCol: null,     // 近くの一覧をどのリストに絞っているか
     lineDay: null,      // 表示する日（nullは全部）。既定は最新の日
     lineDayPicked: false,  // ユーザーが自分で日を選んだか
     shareType: null,       // この端末の共有シートが受け付ける形式
@@ -177,7 +180,8 @@
     openGroups: new Set(),   // 一覧で開いている都道府県
     editing: null,      // 編集中の記録（nullなら新規記録）
     lastPlace: null,    // 同じ地点の前回の場所情報（引き継ぎ用）
-    histMode: 'visits', // 記録タブの表示（visits / chome / stats）
+    histMode: 'visits', // 記録タブの表示（visits / chome / year / stats）
+    histYear: '',       // 1年ごとで見ている年
     histShown: 0,
     viewing: null,     // 見るだけの画面に出している記録
     sheetOnly: null,   // 記録シートで1件だけ出しているときの id
@@ -2763,6 +2767,7 @@
     const all = await Store.getAllVisits();
 
     if (state.histMode === 'chome') { renderChomeList(box, all); return; }
+    if (state.histMode === 'year') { renderYear(box, all); return; }
     if (state.histMode === 'stats') { renderStats(box, all); return; }
 
     const q = (($('#hist-filter') || {}).value || '').trim();
@@ -3075,6 +3080,146 @@
   }
 
   // まとめ。集めたものが数字で見えると続けやすくなる。
+
+  // ★1年のふりかえり★
+  // 「まとめ」は全期間の合計なので、記録が増えるほど数字が動かなくなる。
+  // 年で区切ると「今年は何県に新しく行ったか」が見える。
+  // ★新しく行った、は記録そのものから出す★
+  // 記録には category（pref / city）と spotId が入っているので、
+  // その spotId を最初に記録した年がその年なら「今年が初めて」。地図の判定は要らない。
+  function renderYear(box, all) {
+    $('#hist-summary').textContent = '';
+    box.innerHTML = '';
+    const dated = all.filter((v) => (v.visitedAt || '').length >= 4);
+    if (!dated.length) {
+      box.innerHTML = '<p class="muted" style="padding:12px">まだ記録がありません。</p>';
+      return;
+    }
+    const years = Array.from(new Set(dated.map((v) => v.visitedAt.slice(0, 4)))).sort().reverse();
+    const y = years.includes(state.histYear) ? state.histYear : years[0];
+    state.histYear = y;
+
+    const chips = document.createElement('div');
+    chips.className = 'nearchips';
+    for (const yy of years) {
+      const c = document.createElement('button');
+      c.type = 'button';
+      c.className = 'nearchip' + (yy === y ? ' is-on' : '');
+      c.textContent = yy + '年';
+      c.addEventListener('click', () => { state.histYear = yy; renderYear(box, all); });
+      chips.appendChild(c);
+    }
+    box.appendChild(chips);
+
+    const mine = dated.filter((v) => v.visitedAt.slice(0, 4) === y);
+    // spotId ごとの「いちばん古い記録の年」。これが y ならその年が初めて。
+    const firstYear = new Map();
+    for (const v of dated) {
+      const k = v.category + ':' + v.spotId;
+      const yy = v.visitedAt.slice(0, 4);
+      if (!firstYear.has(k) || yy < firstYear.get(k)) firstYear.set(k, yy);
+    }
+    const newPref = new Set();
+    const newCity = new Set();
+    for (const v of mine) {
+      const k = v.category + ':' + v.spotId;
+      if (firstYear.get(k) !== y) continue;
+      if (v.category === 'pref') newPref.add(v.spotId);
+      if (v.category === 'city') newCity.add(v.spotId);
+    }
+
+    const card = (title, rows) => {
+      if (!rows.length) return null;
+      const c = document.createElement('div');
+      c.className = 'card';
+      const h = document.createElement('h2');
+      h.textContent = title;
+      c.appendChild(h);
+      for (const r of rows) {
+        const line = document.createElement('div');
+        line.className = 'diag__row';
+        const a = document.createElement('span'); a.textContent = r[0];
+        const b = document.createElement('b'); b.textContent = r[1];
+        line.appendChild(a); line.appendChild(b);
+        c.appendChild(line);
+      }
+      box.appendChild(c);
+      return c;
+    };
+
+    const out = mine.filter((v) => !v.athome);          // 出かけた記録だけ
+    const days = new Set(out.map((v) => v.visitedAt));
+    const names = new Set();
+    for (const v of out) {
+      const n = ((v.place && v.place.name) || v.name || '').trim();
+      if (n) names.add(n);
+    }
+    const photos = mine.reduce((n, v) => n + (v.photoIds || []).length, 0);
+    card(y + '年のふりかえり', [
+      ['記録', mine.length + ' 件'],
+      ['出かけた日', days.size + ' 日'],
+      ['行った場所（名前ちがい）', names.size + ' か所'],
+      ['新しく行った都道府県', newPref.size + ' / 47'],
+      ['新しく行った市区町村', newCity.size + ' / ' + LEVELS.city.total],
+      ['写真', photos + ' 枚'],
+    ]);
+
+    // 月ごと。数字だけだと差が分からないので細い棒を添える
+    const months = new Map();
+    for (const v of mine) months.set(v.visitedAt.slice(5, 7), (months.get(v.visitedAt.slice(5, 7)) || 0) + 1);
+    const top = Math.max.apply(null, Array.from(months.values()).concat([1]));
+    const mc = document.createElement('div');
+    mc.className = 'card';
+    const mh = document.createElement('h2');
+    mh.textContent = '月ごとの記録';
+    mc.appendChild(mh);
+    for (let i = 1; i <= 12; i++) {
+      const mm = String(i).padStart(2, '0');
+      const n = months.get(mm) || 0;
+      const row = document.createElement('div');
+      row.className = 'ybar';
+      row.innerHTML = '<span class="ybar__m">' + i + '月</span>'
+        + '<span class="ybar__t"><i style="width:' + Math.round((n / top) * 100) + '%"></i></span>'
+        + '<b class="ybar__n">' + (n || '') + '</b>';
+      mc.appendChild(row);
+    }
+    box.appendChild(mc);
+
+    // 何で行ったか（多い順・上位8）
+    const tags = new Map();
+    for (const v of mine) tags.set(v.tag || '', (tags.get(v.tag || '') || 0) + 1);
+    card('何で行ったか', TAGS.filter((t) => tags.get(t.key))
+      .sort((a, b) => tags.get(b.key) - tags.get(a.key))
+      .slice(0, 8)
+      .map((t) => [t.mark + ' ' + t.label, tags.get(t.key) + ' 件']));
+
+    // よく行った場所
+    const byName = new Map();
+    for (const v of out) {
+      const n = ((v.place && v.place.name) || v.name || '').trim();
+      if (n) byName.set(n, (byName.get(n) || 0) + 1);
+    }
+    card('よく行った場所', Array.from(byName.entries())
+      .filter((e) => e[1] > 1)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map((e) => [e[0], e[1] + ' 回']));
+
+    // 御朱印・お金
+    const gs = mine.filter((v) => v.goshuin);
+    if (gs.length) card('御朱印・御城印など', [['いただいた数', gs.length + ' 体']]);
+    const spent = mine.reduce((n, v) => n + (Number(v.amount) || 0), 0);
+    if (spent > 0) {
+      const home = mine.reduce((n, v) => n + (v.athome ? (Number(v.amount) || 0) : 0), 0);
+      const rows = [['合計', '¥' + spent.toLocaleString('ja-JP')]];
+      if (home > 0) {
+        rows.push(['うち出かけた分', '¥' + (spent - home).toLocaleString('ja-JP')]);
+        rows.push(['うち出かけていない分', '¥' + home.toLocaleString('ja-JP')]);
+      }
+      card('使ったお金', rows);
+    }
+  }
+
   function renderStats(box, all) {
     $('#hist-summary').textContent = '';
     box.innerHTML = '';
@@ -3229,7 +3374,7 @@
         const only = $('#hist-photo-only').closest('.filter__only');
         if (only) only.style.display = (state.histMode === 'visits') ? '' : 'none';
         const fil = $('#hist-filter');
-        if (fil) fil.style.display = (state.histMode === 'stats') ? 'none' : '';
+        if (fil) fil.style.display = (state.histMode === 'stats' || state.histMode === 'year') ? 'none' : '';
         renderHistory(true);
       });
     });
@@ -4574,6 +4719,138 @@
     return true;
   }
 
+
+  // ★近くのまだ行っていない場所★
+  // 集めるリストは「あとで見返すもの」だったが、実際に効くのは出先で
+  // 「この先に何かあるか」が分かること。全リストを現在地から近い順に並べて、
+  // まだ行っていないものだけを出す。
+  // ★駅は入らない★ 県ごとに分かれていて、開いた県ぶんしか手元に無いため。
+  const NEAR_MAX = 60;                     // 出す件数の上限。多いと読めない
+
+  function openNear() {
+    $('#collect-home').hidden = true;
+    $('#collect-near').hidden = false;
+    $('#near-note').textContent = '現在地を調べています…';
+    $('#near-list').innerHTML = '';
+    if (!navigator.geolocation) {
+      nearFrom(null);
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => nearFrom({ lat: pos.coords.latitude, lng: pos.coords.longitude, real: true }),
+      () => nearFrom(null),
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 });
+  }
+
+  function closeNear() {
+    $('#collect-near').hidden = true;
+    $('#collect-home').hidden = false;
+    renderCollect();
+  }
+
+  // 現在地が取れないときは地図の真ん中で代用する。
+  // ★黙って代用しない★ どこを中心に数えたのかが分からないと結果を読み違える。
+  function nearFrom(origin) {
+    if (!origin && state.map) {
+      const c = state.map.getCenter();
+      origin = { lat: c.lat, lng: c.lng, real: false };
+    }
+    state.nearOrigin = origin;
+    renderNear();
+  }
+
+  async function renderNear() {
+    const box = $('#near-list');
+    const o = state.nearOrigin;
+    if (!o) {
+      $('#near-note').textContent = '現在地も地図の位置も分かりませんでした。'
+        + '地図を開いてから、もう一度押してください。';
+      return;
+    }
+    const km = state.nearKm || 10;
+    const radius = km * 1000;
+    const [cols, custom, visits, meta] = await Promise.all([
+      loadCollections(), customCollections(), Store.getAllVisits(), collectMeta(),
+    ]);
+    // 緯度1度は約111km。先に四角で切ってから距離を測る（17,000か所を毎回測らない）
+    const dLat = radius / 111000;
+    const dLng = radius / (111000 * Math.max(0.2, Math.cos(o.lat * Math.PI / 180)));
+    const hits = [];
+    for (const col of cols.concat(custom)) {
+      const items = itemsOf(col, meta.extra);
+      const hand = (meta.hand || {})[col.id];
+      for (const it of items) {
+        if (typeof it.lat !== 'number' || typeof it.lng !== 'number') continue;
+        if (Math.abs(it.lat - o.lat) > dLat || Math.abs(it.lng - o.lng) > dLng) continue;
+        const d = distMeters(o.lat, o.lng, it.lat, it.lng);
+        if (d > radius) continue;
+        if (visitedItem(it, visits, hand, col.reach)) continue;
+        hits.push({ d: d, it: it, col: col });
+      }
+    }
+    hits.sort((a, b) => a.d - b.d);
+
+    // ★東京だと1,100か所のうち大半が稲荷神社になる★
+    // 近い順に並べるだけだと同じリストで埋まって、ほかに何があるか見えない。
+    // どのリストが何か所あるかを上に出し、押すとそれだけに絞る。
+    const cnt = new Map();
+    for (const h of hits) {
+      const k = h.col.id;
+      if (!cnt.has(k)) cnt.set(k, { col: h.col, n: 0 });
+      cnt.get(k).n += 1;
+    }
+    const chips = Array.from(cnt.values()).sort((a, b) => b.n - a.n);
+    const cbox = $('#near-chips');
+    if (cbox) {
+      cbox.innerHTML = '';
+      const mk = (label, id, n) => {
+        const c = document.createElement('button');
+        c.type = 'button';
+        c.className = 'nearchip' + (state.nearCol === id ? ' is-on' : '');
+        c.textContent = label + ' ' + n;
+        c.addEventListener('click', () => {
+          state.nearCol = (state.nearCol === id) ? null : id;
+          renderNear();
+        });
+        return c;
+      };
+      if (chips.length > 1) {
+        cbox.appendChild(mk('すべて', null, hits.length));
+        for (const c of chips) cbox.appendChild(mk((c.col.mark || '') + c.col.name, c.col.id, c.n));
+      }
+    }
+    const picked = state.nearCol ? hits.filter((h) => h.col.id === state.nearCol) : hits;
+    const pickedName = state.nearCol && cnt.get(state.nearCol)
+      ? cnt.get(state.nearCol).col.name : '';
+
+    $('#near-note').textContent = (o.real ? '現在地から' : '★現在地が取れないので地図の真ん中から★')
+      + km + 'km以内で、まだ行っていない場所が ' + hits.length + ' か所。'
+      + (pickedName ? '「' + pickedName + '」だけを出しています（' + picked.length + 'か所）。' : '')
+      + (picked.length > NEAR_MAX ? '近い順に' + NEAR_MAX + 'か所まで出します。' : '')
+      + '（鉄道駅は入りません）';
+    box.innerHTML = '';
+    if (!picked.length) {
+      box.innerHTML = '<p class="muted" style="padding:12px">この範囲は回りきっているようです。'
+        + '範囲を広げてみてください。</p>';
+      return;
+    }
+    for (const h of picked.slice(0, NEAR_MAX)) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'nearrow';
+      const m = h.d < 1000 ? Math.round(h.d) + 'm' : (h.d / 1000).toFixed(1) + 'km';
+      b.innerHTML = '<span class="nearrow__d">' + m + '</span>'
+        + '<span class="nearrow__b"><b>' + escapeHtml(h.it.name) + '</b>'
+        + '<small>' + (h.col.mark || '') + ' ' + escapeHtml(h.col.name)
+        + (h.it.address ? '　' + escapeHtml(h.it.address) : '') + '</small></span>';
+      b.addEventListener('click', () => {
+        switchTab('map');
+        setTimeout(() => state.map.setView([h.it.lat, h.it.lng], h.it.approx ? 13 : 16), 80);
+      });
+      box.appendChild(b);
+    }
+  }
+
   // ★配られているリスト★
   // 巡礼や霊場は地域ごとに無数にあり、全部を同梱すると重くなる。
   // 目録だけを置いておき、押した人のぶんだけ取り込む形にする。
@@ -4675,6 +4952,20 @@
     $('#btn-collect-import').addEventListener('click', () => $('#collect-file').click());
     const cat = $('#btn-collect-catalog');
     if (cat) cat.addEventListener('click', openCatalog);
+    const near = $('#btn-collect-near');
+    if (near) near.addEventListener('click', openNear);
+    const nearBack = $('#btn-near-back');
+    if (nearBack) nearBack.addEventListener('click', closeNear);
+    const nseg = $('#near-seg');
+    if (nseg) {
+      nseg.addEventListener('click', (e) => {
+        const b = e.target.closest('.stseg__b');
+        if (!b) return;
+        state.nearKm = parseInt(b.dataset.km, 10);
+        nseg.querySelectorAll('.stseg__b').forEach((x) => x.classList.toggle('is-on', x === b));
+        renderNear();
+      });
+    }
     const catBack = $('#btn-cat-back');
     if (catBack) catBack.addEventListener('click', closeCatalog);
     $('#collect-file').addEventListener('change', async (e) => {
