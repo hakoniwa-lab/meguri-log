@@ -139,11 +139,12 @@
           <button id="btn-collect-new" class="btn btn--sub btn--slim">リストを作る</button>
           <button id="btn-collect-fromtag" class="btn btn--sub btn--slim">記録から作る</button>
           <button id="btn-collect-import" class="btn btn--sub btn--slim">リストを読み込む</button>
+          <button id="btn-collect-catalog" class="btn btn--sub btn--slim">配られているリスト</button>
           <input type="file" id="collect-file" accept="application/json,text/plain,.json,.txt" hidden>
         </div>
         <p class="muted">「記録から作る」は、選んだタグの記録からリストを作ります（例: 食事タグ →
           行ったお店のリスト）。<b>訪問日・写真・メモは入りません</b>ので、そのまま人に渡せます。<br>
-          人からもらったリストは「読み込む」で足せます。</p>
+          人からもらったリストは「読み込む」で足せます。<br><b>「配られているリスト」</b>は、こちらで用意した追加のリストです。押した人だけが自分のリストとして持ちます（同梱のように勝手には入りません）。</p>
       </div>
     </div>
 
@@ -160,10 +161,26 @@
         <button type="button" class="stseg__b" data-mode="line">路線別</button>
         <button type="button" class="stseg__b" data-mode="gone">廃駅</button>
       </div>
+      <!-- 道の駅・SA/PA 用。路線を持つリストのときだけ出す -->
+      <div class="stseg" id="col-seg" hidden>
+        <button type="button" class="stseg__b is-on" data-cmode="pref">県別</button>
+        <button type="button" class="stseg__b" data-cmode="road">路線別</button>
+      </div>
       <div class="filter">
         <input type="search" id="st-filter" placeholder="県名・路線名で絞り込む">
       </div>
       <div id="st-list" class="list"></div>
+    </div>
+
+
+    <!-- 配られているリスト。同梱と違い、押した人だけが自分のリストとして持つ。 -->
+    <div id="collect-catalog" hidden>
+      <div class="cdet__head">
+        <button id="btn-cat-back" class="linkbtn">← 一覧へ</button>
+      </div>
+      <h2 class="cdet__title">📦 配られているリスト</h2>
+      <p class="muted" id="cat-note">読み込んでいます…</p>
+      <div id="cat-list" class="list"></div>
     </div>
 
     <div id="collect-detail" hidden>
@@ -410,9 +427,9 @@
            載ったままで「まだ無いのか」と思わせていた。本当に残っている分だけ書く。 -->
       <h2>これから追加する予定</h2>
       <ul class="todo">
-        <li>集めるリストの配布（人が作ったリストを、このアプリの中から取り込める形）</li>
-        <li>神社の系統別リスト（八幡・稲荷・天満・浅間 など）</li>
-        <li>知多四国霊場など、まだ入っていない霊場</li>
+        <li>配られているリストを増やす（いまは日本百観音だけ）</li>
+        <li>知多四国霊場など、資料に座標が無くてまだ入れられていない霊場</li>
+        <li>御朱印帳ごとの並べ替え（どの帳面に貼ったかで分ける）</li>
       </ul>
     </div>
   </section>

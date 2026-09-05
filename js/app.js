@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v64';
+  const APP_VERSION = 'v66';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -158,6 +158,7 @@
     stIndex: null,
     stPref: {},
     stMode: 'pref',
+    colMode: 'pref',   // 道の駅・SA/PA の選ぶ画面（pref / road）
     lineDay: null,      // 表示する日（nullは全部）。既定は最新の日
     lineDayPicked: false,  // ユーザーが自分で日を選んだか
     shareType: null,       // この端末の共有シートが受け付ける形式
@@ -3580,6 +3581,8 @@
     { id: 'bando33',    file: './data/collections/bando33.json' },
     { id: 'chichibu34', file: './data/collections/chichibu34.json' },
     { id: 'fudo36',     file: './data/collections/fudo36.json' },
+    { id: 'kanto88',        file: './data/collections/kanto88.json' },
+    { id: 'musashino33',    file: './data/collections/musashino33.json' },
     { id: 'hanatera102', file: './data/collections/hanatera102.json' },
     { id: 'meisui100',  file: './data/collections/meisui100.json' },
     { id: 'taki100',    file: './data/collections/taki100.json' },
@@ -3587,6 +3590,18 @@
     { id: 'lighthouse50', file: './data/collections/lighthouse50.json' },
     { id: 'nisshu22',   file: './data/collections/nisshu22.json' },
     { id: 'ichinomiya', file: './data/collections/ichinomiya.json' },
+    { id: 'shrine_hachiman',  file: './data/collections/shrine_hachiman.json' },
+    { id: 'shrine_inari',   file: './data/collections/shrine_inari.json' },
+    { id: 'shrine_tenman',  file: './data/collections/shrine_tenman.json' },
+    { id: 'shrine_kumano',  file: './data/collections/shrine_kumano.json' },
+    { id: 'shrine_suwa',    file: './data/collections/shrine_suwa.json' },
+    { id: 'shrine_sengen',  file: './data/collections/shrine_sengen.json' },
+    { id: 'shrine_hie',     file: './data/collections/shrine_hie.json' },
+    { id: 'shrine_kasuga',  file: './data/collections/shrine_kasuga.json' },
+    { id: 'shrine_atago',   file: './data/collections/shrine_atago.json' },
+    { id: 'shrine_hakusan',  file: './data/collections/shrine_hakusan.json' },
+    { id: 'shrine_sumiyoshi',  file: './data/collections/shrine_sumiyoshi.json' },
+    { id: 'shrine_konpira',  file: './data/collections/shrine_konpira.json' },
     { id: 'bosou41',    file: './data/collections/bosou41.json' },
     { id: 'nanohana18', file: './data/collections/nanohana18.json' },
     { id: 'awa34',      file: './data/collections/awa34.json' },
@@ -3824,29 +3839,52 @@
   function openPrefChooser(col) {
     state.chooserCol = col;
     state.stMode = 'colpref';
+    state.colMode = 'pref';
     $('#collect-home').hidden = true;
     $('#collect-stations').hidden = false;
     $('#st-seg').hidden = true;
+    // ★SA/PA は「県別」だけだと探しづらい★
+    // 高速に乗っている人は「東北道のどこまで寄ったか」で数えたい。県をまたぐので
+    // 県別では追えない。路線を持つリストのときだけ、県別／路線別を出す。
+    const hasRoad = col.items.some((i) => i.road);
+    const seg = $('#col-seg');
+    if (seg) {
+      seg.hidden = !hasRoad;
+      seg.querySelectorAll('.stseg__b').forEach((x) =>
+        x.classList.toggle('is-on', x.dataset.cmode === 'pref'));
+    }
     $('#st-filter').value = '';
     $('#collect-stations .cdet__title').textContent = (col.mark || '') + ' ' + col.name;
-    $('#st-note').textContent = col.items.length + 'か所。県を選ぶと、その県だけの一覧になります。'
+    $('#st-note').textContent = col.items.length + 'か所。'
+      + (hasRoad ? '県か路線を選ぶと、その中だけの一覧になります。'
+                 : '県を選ぶと、その県だけの一覧になります。')
       + (col.note ? ' ' + col.note : '');
     renderStationChooser();
   }
 
-  function prefSlice(col, pref) {
-    const items = pref ? col.items.filter((i) => i.kuni === pref) : col.items;
+  // 県または路線で切り出す。★id は元のまま★
+  // 手で付けた印や自分で足した場所が、全国と県別で食い違わないようにする。
+  // key が null なら全部。'' は「その欄が空のもの」で、全部とは違う。
+  // ★空文字を「指定なし」と同じ扱いにしない★ 990件が全部出てしまう。
+  function colSlice(col, field, key) {
+    const items = key === null ? col.items
+      : col.items.filter((i) => (i[field] || '') === key);
+    const suffix = key === null ? '（全国）'
+      : (key ? '（' + key + '）' : '（分からないもの）');
     return Object.assign({}, col, {
       items: items,
-      name: col.name + (pref ? '（' + pref + '）' : '（全国）'),
+      name: col.name + suffix,
       prefView: true,
     });
   }
+
+  function prefSlice(col, pref) { return colSlice(col, 'kuni', pref); }
 
   async function openStations() {
     state.chooserCol = null;
     if (state.stMode === 'colpref') state.stMode = 'pref';
     $('#st-seg').hidden = false;
+    if ($('#col-seg')) $('#col-seg').hidden = true;
     $('#collect-stations .cdet__title').textContent = '\uD83D\uDE89 鉄道駅';
     $('#collect-home').hidden = true;
     $('#collect-stations').hidden = false;
@@ -3877,12 +3915,24 @@
     const [visits, meta] = await Promise.all([Store.getAllVisits(), collectMeta()]);
     box.innerHTML = '';
 
-    // 道の駅・SA/PA の県別。並びは JSON の順（県コード順）をそのまま使う
+    // 道の駅・SA/PA の県別／路線別。並びは JSON の順（県コード順）をそのまま使う
     if (mode === 'colpref') {
       const col = state.chooserCol;
       if (!col) return;
-      const prefs = [];
-      for (const it of col.items) if (it.kuni && !prefs.includes(it.kuni)) prefs.push(it.kuni);
+      const byRoad = state.colMode === 'road';
+      const field = byRoad ? 'road' : 'kuni';
+      // 路線別は「その道路に何か所あるか」の多い順。県別は県コード順（JSONの並び）
+      const keys = [];
+      const cnt = {};
+      for (const it of col.items) {
+        const k = it[field] || '';
+        if (!k) continue;
+        if (!(k in cnt)) { cnt[k] = 0; keys.push(k); }
+        cnt[k] += 1;
+      }
+      if (byRoad) keys.sort((a, b) => cnt[b] - cnt[a] || a.localeCompare(b, 'ja'));
+      // ★出典に路線が無いものを黙って消さない★ まとめて最後に出す
+      const noKey = col.items.filter((i) => !(i[field] || '')).length;
       const mk = (label, sub, sub2, sliceCol) => {
         const b = document.createElement('button');
         b.type = 'button';
@@ -3897,10 +3947,14 @@
         });
         return b;
       };
-      if (!q) box.appendChild(mk('全国', '', '', prefSlice(col, null)));
-      for (const pf of prefs) {
-        if (q && pf.indexOf(q) < 0) continue;
-        box.appendChild(mk(pf, '', '', prefSlice(col, pf)));
+      if (!q) box.appendChild(mk('全国', '', '', colSlice(col, field, null)));
+      for (const k of keys) {
+        if (q && k.toLowerCase().indexOf(q) < 0) continue;
+        box.appendChild(mk(k, '', '', colSlice(col, field, k)));
+      }
+      if (noKey && !q) {
+        box.appendChild(mk(byRoad ? '路線が分からないもの' : '県が分からないもの',
+          '', '', colSlice(col, field, '')));
       }
       return;
     }
@@ -3991,6 +4045,16 @@
         if (!b) return;
         state.stMode = b.dataset.mode;
         seg.querySelectorAll('.stseg__b').forEach((x) => x.classList.toggle('is-on', x === b));
+        renderStationChooser();
+      });
+    }
+    const cseg = $('#col-seg');
+    if (cseg) {
+      cseg.addEventListener('click', (e) => {
+        const b = e.target.closest('.stseg__b');
+        if (!b) return;
+        state.colMode = b.dataset.cmode;
+        cseg.querySelectorAll('.stseg__b').forEach((x) => x.classList.toggle('is-on', x === b));
         renderStationChooser();
       });
     }
@@ -4466,12 +4530,17 @@
         return o;
       });
     if (!items.length) { toast('中身がありませんでした'); return; }
+    await installCollection(c, items);
+  }
+
+  // ファイルからでも配布からでも、自分のリストとして足すところは同じ
+  async function installCollection(c, items) {
     const list = await customCollections();
     const dup = list.find((x) => x.name === c.name);
     const ok = confirm('「' + c.name + '」を読み込みます。\n' + items.length + ' か所'
       + (dup ? '\n\n同じ名前のリストが既にあります。別のリストとして足します。' : '')
       + '\n\n読み込みますか？');
-    if (!ok) return;
+    if (!ok) return false;
     list.push({
       id: 'c-' + Date.now().toString(36),
       name: dup ? c.name + '（読み込み）' : c.name,
@@ -4481,7 +4550,93 @@
     await saveCustom(list);
     await renderCollect();
     toast('読み込みました（' + items.length + ' か所）');
+    return true;
   }
+
+  // ★配られているリスト★
+  // 巡礼や霊場は地域ごとに無数にあり、全部を同梱すると重くなる。
+  // 目録だけを置いておき、押した人のぶんだけ取り込む形にする。
+  // 取り込んだ先は「自分のリスト」なので、消すのも自由。
+  const CATALOG_URL = './data/shared/index.json';
+
+  function openCatalog() {
+    $('#collect-home').hidden = true;
+    $('#collect-catalog').hidden = false;
+    $('#cat-note').textContent = '読み込んでいます…';
+    $('#cat-list').innerHTML = '';
+    renderCatalog();
+  }
+
+  function closeCatalog() {
+    $('#collect-catalog').hidden = true;
+    $('#collect-home').hidden = false;
+    renderCollect();
+  }
+
+  async function renderCatalog() {
+    const box = $('#cat-list');
+    let cat = null;
+    try {
+      const r = await fetch(CATALOG_URL, { cache: 'no-cache' });
+      cat = await r.json();
+    } catch (e) { cat = null; }
+    if (!cat || cat.kind !== 'catalog' || !Array.isArray(cat.lists)) {
+      // ★取れなかったことを黙って0件にしない★
+      $('#cat-note').textContent = '目録を読めませんでした。通信を確かめて、開き直してください。';
+      return;
+    }
+    const mine = await customCollections();
+    $('#cat-note').textContent = cat.lists.length
+      + '本あります。「取り込む」を押すと、自分のリストとして入ります。'
+      + '同梱のリストと違って、いつでも消せます。';
+    box.innerHTML = '';
+    for (const e of cat.lists) {
+      const had = mine.some((m) => m.name === e.name);
+      const row = document.createElement('div');
+      row.className = 'catrow';
+      row.innerHTML = '<span class="catrow__mark">' + (e.mark || '📋') + '</span>'
+        + '<span class="catrow__body"><b>' + escapeHtml(e.name || '')
+        + (e.area ? '<i class="ccard__area">' + escapeHtml(e.area) + '</i>' : '') + '</b>'
+        + '<small>' + (e.count || 0) + ' か所</small>'
+        + (e.note ? '<small class="catrow__note">' + escapeHtml(e.note) + '</small>' : '')
+        + '</span>';
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'btn btn--sub btn--slim catrow__go';
+      b.textContent = had ? '取り込みずみ' : '取り込む';
+      b.addEventListener('click', async () => {
+        b.disabled = true;
+        b.textContent = '読み込み中…';
+        try {
+          const r = await fetch(e.file, { cache: 'no-cache' });
+          const d = await r.json();
+          const c = d && d.collection;
+          if (!c || !Array.isArray(c.items)) throw new Error('形が違う');
+          const items = c.items
+            .filter((i) => typeof i.lat === 'number' && typeof i.lng === 'number' && i.name)
+            .map((i) => {
+              const o = { name: i.name, lat: i.lat, lng: i.lng };
+              if (i.no) o.no = i.no;
+              if (i.note) o.note = String(i.note).slice(0, 300);
+              if (i.address) o.address = String(i.address).slice(0, 200);
+              if (i.exact) o.exact = true;
+              return o;
+            });
+          const done = await installCollection(c, items);
+          b.textContent = done ? '取り込みずみ' : '取り込む';
+          b.disabled = done;
+        } catch (err) {
+          toast('取り込めませんでした。通信を確かめてください');
+          b.disabled = false;
+          b.textContent = '取り込む';
+        }
+      });
+      b.disabled = had;
+      row.appendChild(b);
+      box.appendChild(row);
+    }
+  }
+
 
   function initCollect() {
     const back = $('#btn-collect-back');
@@ -4497,6 +4652,10 @@
     $('#btn-cdet-share').addEventListener('click', shareCollection);
     $('#btn-collect-fromtag').addEventListener('click', collectionFromTag);
     $('#btn-collect-import').addEventListener('click', () => $('#collect-file').click());
+    const cat = $('#btn-collect-catalog');
+    if (cat) cat.addEventListener('click', openCatalog);
+    const catBack = $('#btn-cat-back');
+    if (catBack) catBack.addEventListener('click', closeCatalog);
     $('#collect-file').addEventListener('change', async (e) => {
       const f = e.target.files[0];
       if (f) await importCollectionFile(f);
