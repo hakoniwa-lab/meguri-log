@@ -304,6 +304,14 @@
           （下の質問を見てください）。Chrome を入れると Chrome 側で改めて聞かれるので、それで動くことも確かめられます。</p>
       </details>
       <details class="qa">
+        <summary>クラウド（iCloud・Google ドライブ）にある写真を入れたい</summary>
+        <p>記録画面の<b>「クラウド・ファイルから」</b>を押してください。書類の選択画面が開き、
+          iCloud Drive・Google ドライブ・Dropbox など、入れているアプリが並びます。</p>
+        <p class="muted">iPhone・iPadでは、先に「写真ライブラリ／撮る／ファイルを選択」の一覧が出ることがあります。
+          その場合は<b>「ファイルを選択」</b>を選ぶとクラウドが出ます。
+          画像でないもの（PDF・動画）を選ぶと入りません。</p>
+      </details>
+      <details class="qa">
         <summary>記録した位置がずれている（建物の中で押した）</summary>
         <p>建物の中や地下だとGPSが数十m〜百mずれます。<b>後から直せます。</b>
           その記録を開いて「編集」を押し、日付の上にある<b>「📍 位置を直す」</b>から、
@@ -472,6 +480,7 @@
         <li>知多四国霊場など、資料に座標が無くてまだ入れられていない霊場</li>
         <li>御朱印帳ごとの並べ替え（どの帳面に貼ったかで分ける）</li>
         <li>1年のふりかえりを画像にして、そのまま人に見せられるようにする</li>
+        <li>OpenStreetMapに上下線が1つしか入っていないSA・PA（佐野・高坂・双葉など）を分ける</li>
       </ul>
     </div>
   </section>
@@ -613,9 +622,12 @@
       <div class="btns">
         <button type="button" id="btn-camera" class="btn btn--sub">カメラで撮る</button>
         <button type="button" id="btn-library" class="btn btn--sub">写真から選ぶ</button>
+        <button type="button" id="btn-files" class="btn btn--sub">クラウド・ファイルから</button>
       </div>
       <input type="file" id="photo-camera" accept="image/*" capture="environment" hidden>
       <input type="file" id="photo-library" accept="image/*" multiple hidden>
+      <!-- ★accept を付けない★ 付けると写真アプリだけが開き、クラウドが出ないことがある -->
+      <input type="file" id="photo-files" multiple hidden>
       <div id="photo-preview" class="preview"></div>
     </div>
 

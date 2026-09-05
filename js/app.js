@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v69';
+  const APP_VERSION = 'v70';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -2293,12 +2293,17 @@
   }
 
   async function addPending(fileList) {
+    let skipped = 0;
     for (const f of fileList) {
-      if (!f || !f.type.startsWith('image/')) continue;
+      // ★画像でないものを黙って捨てない★
+      // クラウドから選べるようにするとPDFや動画も選べてしまう。
+      // 何も起きないと「壊れた」と読まれる。
+      if (!f || !f.type.startsWith('image/')) { if (f) skipped++; continue; }
       const blob = await shrinkImage(f, 1600, 0.82);
       state.pending.push({ blob, url: URL.createObjectURL(blob) });
     }
     renderPending();
+    if (skipped) toast(skipped + ' 件は画像ではないので入れませんでした');
   }
 
   // ---- 目的タグ ----
@@ -2562,6 +2567,15 @@
     // 端末差を避けるため、カメラとライブラリの入口を分けて明示的に開く
     $('#btn-camera').addEventListener('click', () => $('#photo-camera').click());
     $('#btn-library').addEventListener('click', () => $('#photo-library').click());
+    // ★accept を付けない入力を別に用意する★
+    // accept="image/*" だと Android は写真アプリだけを開き、クラウドが出ないことがある。
+    // 付けなければ書類の選択画面が開き、iCloud Drive・Google ドライブ・Dropbox が並ぶ。
+    const bf = $('#btn-files');
+    if (bf) bf.addEventListener('click', () => $('#photo-files').click());
+    const pf = $('#photo-files');
+    if (pf) pf.addEventListener('change', async (e) => {
+      await addPending(e.target.files); e.target.value = '';
+    });
     $('#photo-camera').addEventListener('change', async (e) => {
       await addPending(e.target.files); e.target.value = '';
     });
@@ -4374,11 +4388,12 @@
     // 区分が末尾に飛んだり順番が入れ替わったりする（寺の宗派が最後に出た）。
     // 並びはここで決める。ここに無い区分は後ろにまわす。
     const GROUP_ORDER = ['世界遺産', '城', '巡礼・霊場', '寺の宗派', '神社', '神社の系統',
-      'ご当地の御朱印めぐり', '自然', '道の駅・SA/PA', '三大・名所'];
+      'ご当地の御朱印めぐり', '自然', '道と駅', '三大・名所'];
     const rank = (n) => { const i = GROUP_ORDER.indexOf(n); return i < 0 ? 999 : i; };
     groups.sort((a, b) => rank(a.name) - rank(b.name));
     // ★35本を全部並べると探せない★ 見出しを押すと畳める。畳んだ見出しは端末に覚える
     const folded = new Set((await Store.getMeta('collectFold')) || []);
+    let stationPlaced = false;
     for (const g of groups) {
       const h = document.createElement('button');
       h.type = 'button';
@@ -4388,6 +4403,20 @@
       body.className = 'cgroup__body';
       body.hidden = folded.has(g.name);
       g.cols.forEach((c) => body.appendChild(card(c)));
+      // ★駅もここに入れる★ 道の駅・SA/PA と駅は「移動の途中で寄るもの」で同じ仲間。
+      // 別の区分に分かれていると、車で回る人が2か所を見に行くことになる。
+      // 駅だけは制覇率つきのカードにしない（全国9,000駅に対して0.5%では意味を持たない）。
+      if (g.name === '道と駅') {
+        const sb = document.createElement('button');
+        sb.type = 'button';
+        sb.className = 'ccard';
+        sb.innerHTML = '<span class="ccard__mark">\uD83D\uDE89</span>'
+          + '<span class="ccard__body"><b>鉄道駅<i class="ccard__area">全国</i></b>'
+          + '<small>県か路線を選んでから見ます。廃駅も入っています。</small></span>';
+        sb.addEventListener('click', () => openStations());
+        body.appendChild(sb);
+        stationPlaced = true;
+      }
       h.addEventListener('click', async () => {
         const now = !body.hidden;              // 今開いているなら畳む
         body.hidden = now;
@@ -4398,20 +4427,22 @@
       box.appendChild(h);
       box.appendChild(body);
     }
-    // 駅は桁が違うので、制覇率つきのカードにはしない。
-    // 「全国9,153駅のうち12駅」と出しても意味を持たないため、入口だけ置く。
-    const sh = document.createElement('p');
-    sh.className = 'cgroup';
-    sh.textContent = '駅（県別・路線別）';
-    box.appendChild(sh);
-    const sb = document.createElement('button');
-    sb.type = 'button';
-    sb.className = 'ccard';
-    sb.innerHTML = '<span class="ccard__mark">🚉</span>'
-      + '<span class="ccard__body"><b>鉄道駅<i class="ccard__area">全国</i></b>'
-      + '<small>県か路線を選んでから見ます。廃駅も入っています。</small></span>';
-    sb.addEventListener('click', () => openStations());
-    box.appendChild(sb);
+    // ★「道と駅」が読めなかったときの逃げ道★
+    // 同梱データが1つでも落ちると区分ごと消えるので、駅の入口まで一緒に消してはいけない。
+    if (!stationPlaced) {
+      const sh = document.createElement('p');
+      sh.className = 'cgroup';
+      sh.textContent = '駅（県別・路線別）';
+      box.appendChild(sh);
+      const sb2 = document.createElement('button');
+      sb2.type = 'button';
+      sb2.className = 'ccard';
+      sb2.innerHTML = '<span class="ccard__mark">🚉</span>'
+        + '<span class="ccard__body"><b>鉄道駅<i class="ccard__area">全国</i></b>'
+        + '<small>県か路線を選んでから見ます。廃駅も入っています。</small></span>';
+      sb2.addEventListener('click', () => openStations());
+      box.appendChild(sb2);
+    }
 
     mine.innerHTML = '';
     if (!custom.length) {
