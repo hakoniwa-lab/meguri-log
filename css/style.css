@@ -16,7 +16,8 @@
     1100  .mapsearch    … Leaflet の +/- より前（候補が隠れるため）
     1300  .sheet        … 記録・編集の画面。検索バーより前に出す
     1400  .toast        … 記録画面の上にも出す必要がある
-    1500  .updatebar    … 一番上 */
+    1500  .updatebar
+    2500  .pinmove      … 位置を直す画面。全部を覆う（★--card は無い★ 面の色は #fff） */
 /* ★hidden を最優先で効かせる★
    .mkinds{display:flex} のように display を持つクラスは、ブラウザ既定の
    [hidden]{display:none} に勝ってしまう。そのため hidden を付けても消えず、
@@ -901,7 +902,7 @@ a{color:var(--navy)}
 /* 近くの一覧をリスト別に絞るボタン */
 .nearchips{display:flex; flex-wrap:wrap; gap:6px; padding:0 2px 10px}
 .nearchip{
-  border:1px solid var(--line); background:var(--card); color:var(--ink);
+  border:1px solid var(--line); background:#fff; color:var(--ink);
   border-radius:999px; padding:5px 11px; font-size:12.5px; font:inherit;
   font-size:12.5px; cursor:pointer; white-space:nowrap;
 }
@@ -913,3 +914,20 @@ a{color:var(--navy)}
 .ybar__t{flex:1 1 auto; height:9px; background:var(--bg); border-radius:5px; overflow:hidden}
 .ybar__t i{display:block; height:100%; background:var(--amber); border-radius:5px}
 .ybar__n{flex:0 0 30px; font-size:12.5px; text-align:right; font-variant-numeric:tabular-nums}
+
+/* 位置を直す画面。十字は真ん中に固定し、地図の方を動かす */
+.pinmove{position:fixed; inset:0; z-index:2500; background:#fff; display:flex; flex-direction:column}
+.pinmove__bar{
+  display:flex; align-items:center; gap:10px; padding:10px 12px;
+  border-bottom:1px solid var(--line); background:#fff;
+}
+.pinmove__bar span{flex:1 1 auto; font-size:12.5px; color:var(--muted); text-align:center}
+.pinmove__map{flex:1 1 auto; min-height:0}
+.pinmove__cross{
+  position:absolute; left:50%; top:50%; width:44px; height:44px; margin:-22px 0 0 -22px;
+  pointer-events:none; z-index:1200;
+}
+.pinmove__cross::before,
+.pinmove__cross::after{content:''; position:absolute; background:#e02c2c}
+.pinmove__cross::before{left:50%; top:0; width:2px; height:100%; margin-left:-1px}
+.pinmove__cross::after{top:50%; left:0; height:2px; width:100%; margin-top:-1px}

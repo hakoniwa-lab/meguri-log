@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v68';
+  const APP_VERSION = 'v69';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -157,6 +157,7 @@
     // 駅。索引と、読み込んだ県のぶんだけ持つ（47県ぶんを常に抱えない）
     stIndex: null,
     stPref: {},
+    pinMap: null,      // 位置を直す画面の地図
     stMode: 'pref',
     colMode: 'pref',   // 道の駅・SA/PA の選ぶ画面（pref / road）
     nearKm: 10,        // 近くのまだ行っていない場所（km）
@@ -1853,6 +1854,8 @@
     $('#sheet-coords').textContent = coords
       ? `現在地: ${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)}`
       : '座標は記録されません（地図から選択）';
+    const mv = $('#sheet-movepin');
+    if (mv) mv.hidden = false;
 
     // ★どの1件を見ているかは覚えておく★
     // 保存や削除のあとの描き直しは onlyId を渡してこないので、
@@ -2120,6 +2123,92 @@
     }
   }
 
+
+  // ★記録の位置を後から直す★
+  // 建物の中で「ここを記録」を押すと、GPSが数十m〜百m外れることがある。
+  // 一度記録したら直せないと、地図の点が永久にずれたままになる。
+  // ピンを指で掴ませるのではなく、十字を画面の真ん中に固定して地図を動かしてもらう
+  // （小さなピンは指で隠れて、掴めたかどうかが分からない）。
+  function currentSheetCoords() {
+    const sel = state.selected;
+    if (sel && sel.coords && typeof sel.coords.lat === 'number') return sel.coords;
+    const v = state.editing;
+    if (v && v.coords && typeof v.coords.lat === 'number') return v.coords;
+    // 座標が無い記録もある（地図から市区町村を選んだだけのとき）。その市の真ん中から始める
+    if (sel) {
+      const f = featureByCode(sel.level, sel.code);
+      const c = f && centerOfFeature(f);
+      if (c) return { lat: c[0], lng: c[1] };
+    }
+    return null;
+  }
+
+  function syncSheetCoordsText() {
+    const c = currentSheetCoords();
+    const has = !!(state.selected && state.selected.coords);
+    $('#sheet-coords').textContent = has
+      ? '位置: ' + state.selected.coords.lat.toFixed(5) + ', '
+        + state.selected.coords.lng.toFixed(5)
+      : '座標は記録されません（地図から選択）';
+    const b = $('#sheet-movepin');
+    if (b) b.hidden = !c;                 // 直す出発点すら無いときだけ隠す
+  }
+
+  function openPinMove() {
+    const c = currentSheetCoords();
+    if (!c) { toast('直せる位置がありません'); return; }
+    const box = $('#pinmove');
+    box.hidden = false;
+    if (!state.pinMap) {
+      state.pinMap = L.map('pinmove-map', { zoomControl: true, attributionControl: true });
+      const st = styleOf(state.mapStyle);
+      L.tileLayer(st.url, {
+        minZoom: st.minZoom, maxZoom: st.maxZoom,
+        maxNativeZoom: st.maxNativeZoom || st.maxZoom, attribution: st.attr,
+      }).addTo(state.pinMap);
+    }
+    state.pinMap.setView([c.lat, c.lng], 18);
+    // 開いた直後は幅が0のことがある。描き直しを促す
+    setTimeout(() => state.pinMap.invalidateSize(), 60);
+  }
+
+  function closePinMove() {
+    $('#pinmove').hidden = true;
+  }
+
+  async function commitPinMove() {
+    if (!state.pinMap || !state.selected) { closePinMove(); return; }
+    const c = state.pinMap.getCenter();
+    const before = currentSheetCoords();
+    const moved = before ? distMeters(before.lat, before.lng, c.lat, c.lng) : 0;
+    // ★市区町村をまたいだら黙って通さない★
+    // 記録がぶら下がっている市区町村（spotId）はここでは変えられないので、
+    // 位置だけ隣の市に動かすと、地図の点と塗られた市が食い違う。
+    const f = findAt(state.selected.level, c.lat, c.lng);
+    const here = f && String(f.properties.code) === String(state.selected.code);
+    if (!here) {
+      const nm = f ? f.properties.name : 'この場所';
+      if (!confirm('この位置は「' + nm + '」です。'
+        + 'この記録は「' + state.selected.name + '」に付いているので、'
+        + '位置だけがずれたままになります。\n\nそれでもここにしますか？'
+        + '\n（別の場所として記録し直す方が確実です）')) return;
+    }
+    state.selected.coords = { lat: c.lat, lng: c.lng };
+    syncSheetCoordsText();
+    closePinMove();
+    toast(moved >= 1 ? Math.round(moved) + 'm 動かしました。保存すると反映されます'
+                     : '位置を決めました。保存すると反映されます');
+    // 町丁目は位置から引いているので、動かしたら引き直す
+    $('#sheet-address').textContent = '町丁目を調べ直しています…';
+    const addr = await reverseGeocode(c.lat, c.lng);
+    if (state.selected) {
+      state.selected.address = addr;
+      $('#sheet-address').textContent = addr
+        ? '町丁目: ' + addr.lv01Nm
+        : '町丁目: 取得できませんでした（圏外でも記録はできます）';
+    }
+  }
+
   // ---- 添付写真（保存前の一時置き場）----
   function clearPending() {
     state.pending.forEach((p) => URL.revokeObjectURL(p.url));
@@ -2182,6 +2271,17 @@
       state.pending.push({ blob: ph.blob, url: URL.createObjectURL(ph.blob), existingId: pid });
     }
     renderPending();
+
+    // ★編集はその記録の位置から始める★
+    // 新規記録の現在地が入ったままだと、直したつもりが別の場所になる。
+    if (state.selected) {
+      state.selected.coords = (visit.coords && typeof visit.coords.lat === 'number')
+        ? { lat: visit.coords.lat, lng: visit.coords.lng } : null;
+      state.selected.address = visit.address || null;
+      syncSheetCoordsText();
+      $('#sheet-address').textContent = (visit.address && visit.address.lv01Nm)
+        ? '町丁目: ' + visit.address.lv01Nm : '';
+    }
 
     $('#visit-save').textContent = 'この内容で更新する';
     const bar = $('#edit-bar');
@@ -2451,6 +2551,12 @@
     initTagPicker();
     initExtraFields();
     $('#sheet-close').addEventListener('click', closeSheet);
+    const mvb = $('#sheet-movepin');
+    if (mvb) mvb.addEventListener('click', openPinMove);
+    const pmc = $('#pinmove-cancel');
+    if (pmc) pmc.addEventListener('click', closePinMove);
+    const pmo = $('#pinmove-ok');
+    if (pmo) pmo.addEventListener('click', commitPinMove);
     $('#sheet-backdrop').addEventListener('click', closeSheet);
 
     // 端末差を避けるため、カメラとライブラリの入口を分けて明示的に開く
@@ -2499,6 +2605,9 @@
           place: getPlace(),
           goshuin: getGoshuin(),
           photoIds,
+          // ★位置を直したら書き戻す★ 触っていなければ元のまま
+          coords: (sel && sel.coords) ? sel.coords : v.coords,
+          address: (sel && sel.address) ? sel.address : v.address,
           updatedAt: new Date().toISOString(),
         }));
       } else {

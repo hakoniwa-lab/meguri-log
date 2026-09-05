@@ -304,6 +304,15 @@
           （下の質問を見てください）。Chrome を入れると Chrome 側で改めて聞かれるので、それで動くことも確かめられます。</p>
       </details>
       <details class="qa">
+        <summary>記録した位置がずれている（建物の中で押した）</summary>
+        <p>建物の中や地下だとGPSが数十m〜百mずれます。<b>後から直せます。</b>
+          その記録を開いて「編集」を押し、日付の上にある<b>「📍 位置を直す」</b>から、
+          地図を動かして<b>真ん中の赤い十字</b>を正しい場所に合わせ、「ここにする」→「この内容で更新する」。
+          ピンを指でつまむのではなく<b>地図の方を動かします</b>（指でピンが隠れないようにするためです）。</p>
+        <p class="muted">別の市区町村まで動かすと確認が出ます。記録がぶら下がっている市区町村は
+          ここでは変えられないので、市をまたぐときは記録し直す方が確実です。</p>
+      </details>
+      <details class="qa">
         <summary>ホーム画面に追加して開いたら、記録が1つも無い</summary>
         <p>ホーム画面のアプリは、ブラウザのタブとは<b>記録の入れ物が別</b>です。消えたのではなく、別の場所を見ています。
           <b>元のタブで「バックアップ」を書き出し、ホーム画面のアプリで「読み込む」</b>で移してください。
@@ -468,6 +477,20 @@
   </section>
 </main>
 
+
+<!-- 位置を直す画面。★ピンを掴ませない★
+     建物の中で取った位置は数十mずれる。小さなピンを指で掴ませると狙いが外れるので、
+     十字は真ん中に固定して地図の方を動かしてもらう。 -->
+<div id="pinmove" class="pinmove" hidden>
+  <div class="pinmove__bar">
+    <button type="button" id="pinmove-cancel" class="linkbtn">やめる</button>
+    <span id="pinmove-note">十字を正しい場所に合わせてください</span>
+    <button type="button" id="pinmove-ok" class="btn btn--slim">ここにする</button>
+  </div>
+  <div id="pinmove-map" class="pinmove__map"></div>
+  <div class="pinmove__cross" aria-hidden="true"></div>
+</div>
+
 <div id="sheet" class="sheet">
   <div id="sheet-backdrop" class="sheet__backdrop"></div>
   <div class="sheet__body">
@@ -479,6 +502,7 @@
       <button id="sheet-close" class="iconbtn" aria-label="閉じる">×</button>
     </div>
     <p class="muted" id="sheet-coords"></p>
+    <button type="button" id="sheet-movepin" class="linkbtn" hidden>📍 位置を直す</button>
     <p class="chome" id="sheet-address"></p>
 
     <!-- 既存の記録を編集しているときだけ出る。新規と見分けがつかないと誤って二重記録するため -->
