@@ -1002,3 +1002,7 @@ a{color:var(--navy)}
   color:#fff; background:var(--amber); width:18px; height:18px; border-radius:50%;
   font-size:12px; line-height:18px; text-align:center;
 }
+
+/* 集めるリストが読めなかったときの案内 */
+.collect-bad{margin:0 12px 10px; line-height:1.7}
+.collect-bad .btn{display:block; margin-top:8px}

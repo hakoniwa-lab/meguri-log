@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v75';
+  const APP_VERSION = 'v76';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -148,6 +148,7 @@
     lastTrack: null,
     collections: null,       // 同梱の集めるリスト（初回に読む）
     customCols: [],          // 自分で作ったリスト
+    collectFailed: [],       // 読み込めなかった同梱リストの id
     curCol: null,            // いま開いているリスト
     colLayer: null,          // 地図に出しているリストのレイヤー
     lines: null,        // 移動の線のレイヤー
@@ -4236,18 +4237,42 @@
   // ★広げすぎない★ 隣り合った別の城や札所を巻き込む。
   const COLLECT_NEAR_NAMED = 2000;
 
+  // ★読めなかったことを黙って飲み込まない★
+  // 「1つ読めなくても残りを出す」ようにしていたため、端末に古いものが残っていると
+  // リストが1本だけ静かに消える。「足したはずのリストが出てこない」の原因探しに2回かかった。
   async function loadCollections() {
     if (state.collections) return state.collections;
     const out = [];
+    const failed = [];
     for (const b of BUILTIN_COLLECTIONS) {
       try {
-        const d = await fetch(b.file).then((r) => r.json());
+        const d = await fetch(b.file).then((r) => {
+          if (!r.ok) throw new Error(String(r.status));
+          return r.json();
+        });
         d.builtin = true;
         out.push(d);
-      } catch (e) { /* 1つ読めなくても残りは出す */ }
+      } catch (e) {
+        failed.push(b.id);
+      }
     }
     state.collections = out;
+    state.collectFailed = failed;
     return out;
+  }
+
+  // ★端末に入っている分を全部捨てて入れ直す★
+  // 記録は IndexedDB にあるので、ここで消えるのは「読み込んだファイルの控え」だけ。
+  async function hardRefresh() {
+    try {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((r) => r.unregister()));
+    } catch (e) { /* 使えない端末もある */ }
+    try {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((k) => caches.delete(k)));
+    } catch (e) { /* 同上 */ }
+    location.reload();
   }
 
   async function customCollections() {
@@ -4699,6 +4724,24 @@
     // 巡礼は地域ごとに無数にあり、これから増える。ただ並べると探せなくなる。
     // 地域（関東・四国など）はカードの名前の横に出す。
     box.innerHTML = '';
+
+    // 読めなかったリストがあれば、まずそれを言う
+    const bad = state.collectFailed || [];
+    if (bad.length) {
+      const w = document.createElement('div');
+      w.className = 'warn collect-bad';
+      w.innerHTML = '<b>' + bad.length + '本のリストが読み込めませんでした。</b>'
+        + '端末に古いものが残っているのが原因のことがほとんどです。'
+        + '下のボタンで入れ直せます（<b>記録は消えません</b>）。';
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'btn btn--sub btn--slim';
+      b.textContent = '入れ直す';
+      b.addEventListener('click', hardRefresh);
+      w.appendChild(b);
+      box.appendChild(w);
+    }
+
     const groups = [];
     for (const c of cols) {
       const g = c.group || 'そのほか';
@@ -6010,12 +6053,50 @@
       });
     }).catch(() => {});
 
+    // 起動して少ししてから版を見る（最初の描画を待たせない）
+    setTimeout(checkVersion, 3000);
+
     let reloaded = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       if (reloaded) return;
       reloaded = true;
       location.reload();
     });
+  }
+
+  // ★新しい版が出ているのに気づけないことがある★
+  // 更新の知らせは Service Worker の更新を捕まえたときにしか出ない。
+  // 取り込みに失敗して古いものが動き続けていると、その知らせ自体が出ない。
+  // 公開されている sw.js の版を直接見て、動いている版と違えば言う。
+  async function checkVersion() {
+    try {
+      const r = await fetch('./sw.js', { cache: 'no-store' });
+      if (!r.ok) return;
+      const m = (await r.text()).match(/const VERSION = '([^']+)'/);
+      if (!m || m[1] === APP_VERSION) return;
+      showStaleBar(m[1]);
+    } catch (e) { /* 圏外なら何もしない */ }
+  }
+
+  function showStaleBar(latest) {
+    if ($('#update-bar')) return;
+    const bar = document.createElement('div');
+    bar.id = 'update-bar';
+    bar.className = 'updatebar';
+    const msg = document.createElement('span');
+    msg.textContent = '新しい版 ' + latest + ' があります（いまは ' + APP_VERSION + '）';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'updatebar__btn';
+    btn.textContent = '入れ直す';
+    btn.addEventListener('click', () => {
+      btn.disabled = true;
+      btn.textContent = '入れ直し中…';
+      hardRefresh();
+    });
+    bar.appendChild(msg);
+    bar.appendChild(btn);
+    document.body.appendChild(bar);
   }
 
   function showUpdateBar(worker) {
