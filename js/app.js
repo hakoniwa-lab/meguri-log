@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v73';
+  const APP_VERSION = 'v74';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -4179,6 +4179,8 @@
     { id: 'dam',              file: './data/collections/dam.json' },
     { id: 'onsen',            file: './data/collections/onsen.json' },
     { id: 'airport',          file: './data/collections/airport.json' },
+    { id: 'port',             file: './data/collections/port.json' },
+    { id: 'ferry',            file: './data/collections/ferry.json' },
     { id: 'nisshu22',   file: './data/collections/nisshu22.json' },
     { id: 'ichinomiya', file: './data/collections/ichinomiya.json' },
     { id: 'shrine_hachiman',  file: './data/collections/shrine_hachiman.json' },
@@ -4193,13 +4195,13 @@
     { id: 'shrine_hakusan',  file: './data/collections/shrine_hakusan.json' },
     { id: 'shrine_sumiyoshi',  file: './data/collections/shrine_sumiyoshi.json' },
     { id: 'shrine_konpira',  file: './data/collections/shrine_konpira.json' },
-    { id: 'bosou41',    file: './data/collections/bosou41.json' },
-    { id: 'nanohana18', file: './data/collections/nanohana18.json' },
-    { id: 'awa34',      file: './data/collections/awa34.json' },
-    { id: 'asakusa9',   file: './data/collections/asakusa9.json' },
-    { id: 'sakura7',    file: './data/collections/sakura7.json' },
-    { id: 'ibaraki12',  file: './data/collections/ibaraki12.json' },
-    { id: 'hama7',      file: './data/collections/hama7.json' },
+    { id: 'betsuhyo',         file: './data/collections/betsuhyo.json' },
+    { id: 'gokoku',           file: './data/collections/gokoku.json' },
+    { id: 'toshogu',          file: './data/collections/toshogu.json' },
+    { id: 'jingu',            file: './data/collections/jingu.json' },
+    { id: 'taisha',           file: './data/collections/taisha.json' },
+    { id: 'sosha',            file: './data/collections/sosha.json' },
+    { id: 'chokugan',         file: './data/collections/chokugan.json' },
     { id: 'yakushi91',  file: './data/collections/yakushi91.json' },
     { id: 'jizo108',    file: './data/collections/jizo108.json' },
     { id: 'sankei',     file: './data/collections/sankei.json' },
@@ -4708,7 +4710,7 @@
     // 区分が末尾に飛んだり順番が入れ替わったりする（寺の宗派が最後に出た）。
     // 並びはここで決める。ここに無い区分は後ろにまわす。
     const GROUP_ORDER = ['世界遺産', '城', '巡礼・霊場', '寺の宗派', '神社', '神社の系統',
-      'ご当地の御朱印めぐり', '自然', '道と駅', '三大・名所'];
+      '社格・由緒', '自然', '海と空', '道と駅', '三大・名所'];
     const rank = (n) => { const i = GROUP_ORDER.indexOf(n); return i < 0 ? 999 : i; };
     groups.sort((a, b) => rank(a.name) - rank(b.name));
     // ★35本を全部並べると探せない★ 見出しを押すと畳める。畳んだ見出しは端末に覚える
@@ -5169,8 +5171,13 @@
       + (dup ? '\n\n同じ名前のリストが既にあります。別のリストとして足します。' : '')
       + '\n\n読み込みますか？');
     if (!ok) return false;
+    // ★配ったリストが元の id を持っていれば、それを使う★
+    // 手で付けた印や自分で足した場所は id で覚えている。id が変わると、
+    // 同梱から配布に移したリストを入れ直したときに、それまでの印が消える。
+    const keepId = (typeof c.id === 'string' && /^[a-z0-9_]{2,30}$/.test(c.id)
+      && !list.some((x) => x.id === c.id)) ? c.id : null;
     list.push({
-      id: 'c-' + Date.now().toString(36),
+      id: keepId || ('c-' + Date.now().toString(36)),
       name: dup ? c.name + '（読み込み）' : c.name,
       mark: c.mark || '📋', tag: c.tag || '', note: c.note || 'もらったリスト',
       items: items,
