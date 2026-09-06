@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v72';
+  const APP_VERSION = 'v73';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -101,7 +101,9 @@
   const DAYS = ['月', '火', '水', '木', '金', '土', '日', '不定休'];
   // 集めるものは御朱印だけではない。御城印・御船印なども同じ枠で記録する。
   // 既存の記録には kind が無いので、未設定は「御朱印」として扱う（GS_KIND[0]）。
-  const GS_KIND = ['御朱印', '御城印', '御船印', '鉄印', 'その他'];
+  // ★並びを変えず、後ろに足す★ 先頭は既定値（kind が無い古い記録は御朱印として扱う）。
+  // 途中に入れると GS_KIND[0] が動いて、古い記録の種類が変わってしまう。
+  const GS_KIND = ['御朱印', '御城印', '御船印', '鉄印', '御朱印帳', '授与品', 'その他'];
   const gsKindOf = (g) => (g && g.kind) || GS_KIND[0];
   const GS_WRITE = ['直書き', '書き置き'];
   const GS_FORM = ['通常', '見開き', '切り絵'];
@@ -4716,7 +4718,9 @@
       const h = document.createElement('button');
       h.type = 'button';
       h.className = 'cgroup cgroup--btn' + (folded.has(g.name) ? ' is-folded' : '');
-      h.innerHTML = '<i class="cgroup__caret"></i>' + escapeHtml(g.name) + '（' + g.cols.length + '）';
+      // ★駅は cols に入っていない★ 下で足す1枚を数に入れないと「道と駅（2）」になる
+      const shown = g.cols.length + (g.name === '道と駅' ? 1 : 0);
+      h.innerHTML = '<i class="cgroup__caret"></i>' + escapeHtml(g.name) + '（' + shown + '）';
       const body = document.createElement('div');
       body.className = 'cgroup__body';
       body.hidden = folded.has(g.name);
