@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v76';
+  const APP_VERSION = 'v77';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -163,6 +163,10 @@
     pinMap: null,      // 位置を直す画面の地図
     stMode: 'pref',
     colMode: 'pref',   // 道の駅・SA/PA の選ぶ画面（pref / road）
+    colPinsOn: false,  // 集めるリストの場所を地図に出すか
+    colPinLayer: null,
+    follow: false,     // 移動中に地図を自分に合わせるか
+    lastFix: null,     // いちばん新しい現在地
     nearKm: 10,        // 近くのまだ行っていない場所（km）
     nearOrigin: null,
     nearCol: null,     // 近くの一覧をどのリストに絞っているか
@@ -296,6 +300,16 @@
     // ズームが変わるとピンのまとめ方も変わる。読み直しはせず描き直すだけ
     state.map.on('zoomend', () => drawPins());
 
+    const cp = $('#btn-colpins');
+    if (cp) cp.addEventListener('click', () => {
+      state.colPinsOn = !state.colPinsOn;
+      setToggle('#btn-colpins', state.colPinsOn);
+      renderCollectPins(true);
+      if (!state.colPinsOn) toast('集めるリストの場所を隠します');
+    });
+    const fb = $('#btn-follow');
+    if (fb) fb.addEventListener('click', () => setFollow(!state.follow));
+
     $('#btn-marks').addEventListener('click', () => {
       state.marksOn = !state.marksOn;
       setToggle('#btn-marks', state.marksOn);
@@ -310,6 +324,14 @@
     state.map.on('moveend', () => {
       state.markCache = null;   // 範囲が変わったら取り直す
       if (state.marksOn) showSearchArea(true);
+      if (state.colPinsOn) renderCollectPins(false);
+    });
+
+    // ★指で地図を動かしたら追従はやめる★
+    // 動かしたそばから戻されると操作できない。自分で動かした時だけ解除する
+    // （プログラムから動かした分と区別するため、dragstart だけを見る）。
+    state.map.on('dragstart', () => {
+      if (state.follow) setFollow(false);
     });
 
     // 一覧にもOSMにも無い場所は、地図を長押しして自分で登録する。
@@ -1965,6 +1987,7 @@
         setTimeout(() => state.map.setView([v.coords.lat, v.coords.lng], 16), 80);
       });
       box.appendChild(jump);
+      box.appendChild(routeButton(v.coords.lat, v.coords.lng, v.name));
     }
 
     // 写真は最後にまとめて。読み込みで画面を待たせない
@@ -4032,6 +4055,7 @@
 
   async function stopTracking() {
     state.tracking = false;
+    if (state.follow) { state.follow = false; setToggle('#btn-follow', false); }
     if (state.trackWatch != null) { navigator.geolocation.clearWatch(state.trackWatch); state.trackWatch = null; }
     document.removeEventListener('visibilitychange', onTrackVisibility);
     if (state.wakeLock) { try { await state.wakeLock.release(); } catch (e) { /* もう外れている */ } }
@@ -4056,6 +4080,13 @@
   async function onTrackPos(pos) {
     if (!state.tracking) return;
     const lat = pos.coords.latitude, lng = pos.coords.longitude;
+    state.lastFix = { lat: lat, lng: lng };
+    // 自分の居場所の印も動かす（追従していなくても、どこに居るかは要る）
+    if (state.here) state.map.removeLayer(state.here);
+    state.here = L.circleMarker([lat, lng], {
+      radius: 7, color: '#2c3e62', fillColor: '#4a7fd4', fillOpacity: 0.95, weight: 3,
+    }).addTo(state.map);
+    if (state.follow) state.map.setView([lat, lng], Math.max(state.map.getZoom(), 15));
     // ★線は市区町村の判定より細かく拾う★
     // 150mおきだと曲がり角が全部切り落とされて、道の形にならない。
     const tail = state.track.length ? state.track[state.track.length - 1] : null;
@@ -4183,6 +4214,11 @@
     { id: 'port',             file: './data/collections/port.json' },
     { id: 'ferry',            file: './data/collections/ferry.json' },
     { id: 'island',           file: './data/collections/island.json' },
+    { id: 'zoo',              file: './data/collections/zoo.json' },
+    { id: 'museum',           file: './data/collections/museum.json' },
+    { id: 'botanical',        file: './data/collections/botanical.json' },
+    { id: 'amusement',        file: './data/collections/amusement.json' },
+    { id: 'tower',            file: './data/collections/tower.json' },
     { id: 'nisshu22',   file: './data/collections/nisshu22.json' },
     { id: 'ichinomiya', file: './data/collections/ichinomiya.json' },
     { id: 'shrine_hachiman',  file: './data/collections/shrine_hachiman.json' },
@@ -4754,7 +4790,7 @@
     // 区分が末尾に飛んだり順番が入れ替わったりする（寺の宗派が最後に出た）。
     // 並びはここで決める。ここに無い区分は後ろにまわす。
     const GROUP_ORDER = ['世界遺産', '城', '巡礼・霊場', '寺の宗派', '神社', '神社の系統',
-      '社格・由緒', '自然', '海と空', '道と駅', '三大・名所'];
+      '社格・由緒', '自然', '海と空', '道と駅', '見どころ', '三大・名所'];
     const rank = (n) => { const i = GROUP_ORDER.indexOf(n); return i < 0 ? 999 : i; };
     groups.sort((a, b) => rank(a.name) - rank(b.name));
     // ★35本を全部並べると探せない★ 見出しを押すと畳める。畳んだ見出しは端末に覚える
@@ -4969,6 +5005,127 @@
 
   // 地図にこのリストを出す。まだ行っていない所が見えるのが目的なので、
   // 行った所は薄く、まだの所をはっきり出す。
+
+  // ★集めるリストの場所を、地図を見ているときにも出す★
+  // これまでリストを開いて「地図で見る」を押したときしか出なかった。
+  // 走っている途中で「ここ何だろう」と思ったときに印があると分かる、という声から。
+  //
+  // ★全部は描かない★ 18,000か所あるので、画面に入っているぶんだけを描く。
+  // 引きすぎているときは数が多すぎて意味を持たないので、代わりにその旨を出す。
+  const COLPIN_ZOOM = 11;          // これより引いていたら出さない
+  const COLPIN_MAX = 600;          // 一度に描く上限
+
+  // ★市区町村の塗りの上に載せる★
+  // 普通に足すと、塗りの多角形と同じ層に入る。
+  // 塗りは記録のたびに描き直すので、あとから上に来て印を覚う。
+  // 印を押したつもりが「その県を記録」になっていた。
+  function colPinPane() {
+    if (!state.map.getPane('colpins')) {
+      const pane = state.map.createPane('colpins');
+      pane.style.zIndex = 450;      // 塗り(400)より上、ピン(600)より下
+    }
+    return 'colpins';
+  }
+
+  async function renderCollectPins(force) {
+    if (state.colPinLayer) {
+      state.map.removeLayer(state.colPinLayer);
+      state.colPinLayer = null;
+    }
+    if (!state.colPinsOn) return;
+    if (state.map.getZoom() < COLPIN_ZOOM) {
+      if (force) toast('もう少し寄ると、集めるリストの場所が出ます');
+      return;
+    }
+    const [cols, custom, visits, meta] = await Promise.all([
+      loadCollections(), customCollections(), Store.getAllVisits(), collectMeta(),
+    ]);
+    const b = state.map.getBounds();
+    const g = L.layerGroup();
+    let n = 0, over = false;
+    for (const col of cols.concat(custom)) {
+      const hand = (meta.hand || {})[col.id];
+      for (const it of itemsOf(col, meta.extra)) {
+        if (typeof it.lat !== 'number' || typeof it.lng !== 'number') continue;
+        if (!b.contains([it.lat, it.lng])) continue;
+        if (n >= COLPIN_MAX) { over = true; break; }
+        n++;
+        const been = visitedItem(it, visits, hand, col.reach);
+        const m = L.circleMarker([it.lat, it.lng], {
+          pane: colPinPane(),
+          radius: been ? 4 : 7,
+          color: been ? '#9aa7b8' : '#c0392b',
+          fillColor: been ? '#c9d2e0' : '#e8a33d',
+          fillOpacity: been ? 0.45 : 0.9,
+          weight: 2,
+        });
+        m.bindTooltip((been ? '✓ ' : '') + it.name + '（' + col.name + '）');
+        m.bindPopup(collectPinPopup(it, col, been));
+        g.addLayer(m);
+      }
+      if (over) break;
+    }
+    state.colPinLayer = g.addTo(state.map);
+    if (force) {
+      toast(over ? ('この範囲は多すぎるので ' + COLPIN_MAX + ' か所まで出しています')
+                 : (n ? n + ' か所を出しています（濃い色がまだの所）' : 'この範囲にはありません'));
+    }
+  }
+
+  function collectPinPopup(it, col, been) {
+    const wrap = document.createElement('div');
+    wrap.className = 'colpop';
+    wrap.innerHTML = '<b>' + escapeHtml(it.name) + '</b>'
+      + '<small>' + escapeHtml((col.mark || '') + ' ' + col.name)
+      + (been ? '　✓ 記録があります' : '　まだです') + '</small>'
+      + (it.note ? '<small>' + escapeHtml(it.note) + '</small>' : '');
+    if (!been) {
+      const rec = document.createElement('button');
+      rec.type = 'button';
+      rec.className = 'btn btn--slim';
+      rec.textContent = 'ここを記録する';
+      rec.addEventListener('click', () => {
+        state.map.closePopup();
+        recordLandmark(it.name, { tag: col.tag || '' }, it.lat, it.lng);
+      });
+      wrap.appendChild(rec);
+    }
+    wrap.appendChild(routeButton(it.lat, it.lng, it.name));
+    return wrap;
+  }
+
+  // ★道案内は自分では作らない★
+  // 経路を出すには道路のつながりを持つ別の仕組みが要る（毎回どこかに問い合わせる）。
+  // 記録は端末の中だけ、という約束と相性が悪いし、圏外では動かない。
+  // 代わりに、その場所を目的地にした地図アプリを開く。出発地は向こうの現在地。
+  function dirUrl(lat, lng) {
+    return 'https://www.google.com/maps/dir/?api=1&destination='
+      + lat + ',' + lng + '&travelmode=driving';
+  }
+
+  function routeButton(lat, lng, name) {
+    const a = document.createElement('a');
+    a.className = 'btn btn--sub btn--slim';
+    a.href = dirUrl(lat, lng);
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.textContent = '道のりを見る';
+    a.title = (name || 'この場所') + 'までの道のりをGoogleマップで開きます';
+    return a;
+  }
+
+  // ★移動中は地図の方を動かす★
+  // 自分の印が画面の外へ出ていってしまい、そのたびに指で追いかけることになっていた。
+  // 追従を入れると、自分は真ん中に留まり、地図が流れる（ナビと同じ見え方）。
+  function setFollow(on) {
+    state.follow = !!on;
+    setToggle('#btn-follow', state.follow);
+    if (state.follow && state.lastFix) {
+      state.map.setView([state.lastFix.lat, state.lastFix.lng], Math.max(state.map.getZoom(), 15));
+    }
+    toast(state.follow ? '地図を自分に合わせます（地図を動かすと解除）' : '追従をやめました');
+  }
+
   async function showCollectionOnMap() {
     const col = state.curCol;
     if (!col) return;
@@ -4981,6 +5138,7 @@
     for (const it of items) {
       const been = visitedItem(it, visits, hand);
       const m = L.circleMarker([it.lat, it.lng], {
+        pane: colPinPane(),
         radius: been ? 5 : 8,
         color: been ? '#9aa7b8' : '#c0392b',
         fillColor: been ? '#c9d2e0' : '#e8a33d',
