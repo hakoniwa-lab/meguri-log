@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v78';
+  const APP_VERSION = 'v79';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -48,8 +48,12 @@
     { key: 'port',  mark: '⛴️', label: '港・フェリー' },
     { key: 'shrine',mark: '⛩️', label: '神社' },
     { key: 'temple',mark: '📿', label: 'お寺' },
-    { key: 'zoo',   mark: '🦁', label: '動物園・水族館' },
-    { key: 'museum',mark: '🎨', label: '博物館・美術館' },
+    // ★key は付け替えない★ zoo で保存済みの記録が動物園に見えるのは許容する。
+    // 水族館は新しい key を足して、これから分けて記録できるようにする。
+    { key: 'zoo',   mark: '🦁', label: '動物園' },
+    { key: 'aqua',  mark: '🐠', label: '水族館' },
+    { key: 'museum',mark: '🏛️', label: '博物館' },
+    { key: 'art',   mark: '🎨', label: '美術館' },
     { key: 'garden',mark: '🌸', label: '公園・庭園' },
     { key: 'tower', mark: '🗼', label: '展望台・タワー' },
     { key: 'shop',  mark: '🛍️', label: '買い物' },
@@ -998,14 +1002,18 @@
     if (/ダム$/.test(name)) return 'dam';
     if (/(滝|の滝)$/.test(name)) return 'fall';
     if (/灯台$/.test(name)) return 'light';
-    if (/(水族館|動物園)$/.test(name)) return 'zoo';
-    if (/(博物館|美術館|記念館|資料館)$/.test(name)) return 'museum';
+    if (/水族館$/.test(name)) return 'aqua';
+    if (/動物園$/.test(name)) return 'zoo';
+    if (/美術館$/.test(name)) return 'art';
+    if (/(博物館|記念館|資料館)$/.test(name)) return 'museum';
     if (/(公園|庭園|植物園)$/.test(name)) return 'garden';
     if (/(タワー|展望台)$/.test(name)) return 'tower';
     if (/キャンプ場$/.test(name)) return 'camp';
     if (/^(supermarket|department_store|mall|shop)$/.test(type)) return 'shop';
-    if (/^(zoo|aquarium)$/.test(type)) return 'zoo';
-    if (/^(museum|gallery|artwork)$/.test(type)) return 'museum';
+    if (/^aquarium$/.test(type)) return 'aqua';
+    if (/^zoo$/.test(type)) return 'zoo';
+    if (/^(gallery|artwork)$/.test(type)) return 'art';
+    if (/^museum$/.test(type)) return 'museum';
     if (/^(park|garden)$/.test(type)) return 'garden';
     if (/^(waterfall)$/.test(type)) return 'fall';
     if (/^(lighthouse)$/.test(type)) return 'light';
@@ -4219,6 +4227,12 @@
     { id: 'botanical',        file: './data/collections/botanical.json' },
     { id: 'amusement',        file: './data/collections/amusement.json' },
     { id: 'tower',            file: './data/collections/tower.json' },
+    { id: 'aquarium',         file: './data/collections/aquarium.json' },
+    { id: 'artmuseum',        file: './data/collections/artmuseum.json' },
+    { id: 'tokaido',          file: './data/collections/tokaido.json' },
+    { id: 'nakasendo',        file: './data/collections/nakasendo.json' },
+    { id: 'nikkokaido',       file: './data/collections/nikkokaido.json' },
+    { id: 'koshukaido',       file: './data/collections/koshukaido.json' },
     { id: 'nisshu22',   file: './data/collections/nisshu22.json' },
     { id: 'ichinomiya', file: './data/collections/ichinomiya.json' },
     { id: 'shrine_hachiman',  file: './data/collections/shrine_hachiman.json' },
@@ -4790,7 +4804,7 @@
     // 区分が末尾に飛んだり順番が入れ替わったりする（寺の宗派が最後に出た）。
     // 並びはここで決める。ここに無い区分は後ろにまわす。
     const GROUP_ORDER = ['世界遺産', '城', '巡礼・霊場', '寺の宗派', '神社', '神社の系統',
-      '社格・由緒', '自然', '海と空', '道と駅', '見どころ', '三大・名所'];
+      '社格・由緒', '自然', '海と空', '道と駅', '街道', '見どころ', '三大・名所'];
     const rank = (n) => { const i = GROUP_ORDER.indexOf(n); return i < 0 ? 999 : i; };
     groups.sort((a, b) => rank(a.name) - rank(b.name));
     // ★35本を全部並べると探せない★ 見出しを押すと畳める。畳んだ見出しは端末に覚える
