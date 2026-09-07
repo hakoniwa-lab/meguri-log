@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v79';
+  const APP_VERSION = 'v80';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -174,6 +174,7 @@
     nearKm: 10,        // 近くのまだ行っていない場所（km）
     nearOrigin: null,
     nearCol: null,     // 近くの一覧をどのリストに絞っているか
+    nearHits: [],      // いま出ている分（地図に出すボタン用）
     lineDay: null,      // 表示する日（nullは全部）。既定は最新の日
     lineDayPicked: false,  // ユーザーが自分で日を選んだか
     shareType: null,       // この端末の共有シートが受け付ける形式
@@ -3913,6 +3914,7 @@
     if (name === 'settings') {
       ensurePersistOnce().then(() => { renderPersistInfo(); renderDeviceInfo(); });
       renderBackupStatus(); renderStorageInfo(); renderPickTags(); renderTagPrefs();
+      renderPhotoSize();
       prepareBackupFile(state.shareType);
     } else {
       releaseBackupFile();
@@ -5086,6 +5088,38 @@
     }
   }
 
+  // ★「近くのまだ行っていない場所」をそのまま地図へ★
+  // 一覧で見ても位置関係が分からない。絞り込んだ結果をそのまま出す。
+  async function showNearOnMap() {
+    const hits = state.nearHits || [];
+    if (!hits.length) { toast('出せるものがありません'); return; }
+    if (state.colLayer) { state.map.removeLayer(state.colLayer); state.colLayer = null; }
+    const g = L.layerGroup();
+    for (const h of hits.slice(0, 400)) {
+      const m = L.circleMarker([h.it.lat, h.it.lng], {
+        pane: colPinPane(),
+        radius: 7, color: '#c0392b', fillColor: '#e8a33d', fillOpacity: 0.9, weight: 2,
+      });
+      m.bindTooltip(h.it.name + '（' + h.col.name + '）');
+      m.bindPopup(collectPinPopup(h.it, h.col, false));
+      g.addLayer(m);
+    }
+    state.colLayer = g.addTo(state.map);
+    state.colLayerName = '近くのまだの場所';
+    closeNear();
+    switchTab('map');
+    const pts = hits.slice(0, 400).map((h) => [h.it.lat, h.it.lng]);
+    const o = state.nearOrigin;
+    if (o) pts.push([o.lat, o.lng]);
+    setTimeout(() => {
+      state.map.invalidateSize();
+      state.map.fitBounds(L.latLngBounds(pts).pad(0.1));
+    }, 120);
+    $('#btn-col-clear').hidden = false;
+    $('#btn-col-clear').textContent = '「近くのまだの場所」を消す';
+    toast(Math.min(hits.length, 400) + ' か所を地図に出しました');
+  }
+
   function collectPinPopup(it, col, been) {
     const wrap = document.createElement('div');
     wrap.className = 'colpop';
@@ -5519,6 +5553,8 @@
         + '範囲を広げてみてください。</p>';
       return;
     }
+    // 地図に出すボタン用に、いま出ている分を覚えておく
+    state.nearHits = picked;
     for (const h of picked.slice(0, NEAR_MAX)) {
       const b = document.createElement('button');
       b.type = 'button';
@@ -5639,6 +5675,8 @@
     if (cat) cat.addEventListener('click', openCatalog);
     const near = $('#btn-collect-near');
     if (near) near.addEventListener('click', openNear);
+    const nmap = $('#btn-near-map');
+    if (nmap) nmap.addEventListener('click', showNearOnMap);
     const nearBack = $('#btn-near-back');
     if (nearBack) nearBack.addEventListener('click', closeNear);
     const nseg = $('#near-seg');
@@ -5699,6 +5737,21 @@
   // ★「バックアップを取った」と記録してよいのは全部を書き出したときだけ★
   // 一部だけの書き出しでここを通すと、次の警告が出なくなり、
   // 全部のバックアップを取ったつもりのまま機種変してしまう。
+  // ★書き出す前に大きさを知らせる★
+  // 写真1,000枚で300MBになる。押してから固まったように見えるのを避ける。
+  async function renderPhotoSize() {
+    const el = $('#photo-size');
+    if (!el) return;
+    const visits = await Store.getAllVisits();
+    const n = visits.reduce((a, v) => a + (v.photoIds || []).length, 0);
+    if (!n) { el.textContent = '写真はまだありません。'; return; }
+    const photos = await Store.photosOf(visits);
+    let bytes = 0;
+    for (const p of photos) bytes += (p.size || (p.blob && p.blob.size) || 0);
+    el.textContent = '写真 ' + photos.length + ' 枚・およそ '
+      + (bytes / 1048576).toFixed(1) + 'MB（ZIPにしてもほぼ同じ大きさです）';
+  }
+
   async function saveBackupFile(file, counts) {
     saveFile(file);
     await Store.markBackedUp(counts);
@@ -5721,12 +5774,60 @@
     return null;
   }
 
-  // バックアップの中身を1つ作る。共有にもファイル保存にも同じものを使う。
+  // ★バックアップは「記録」と「写真」に分ける★
+  // 1つのJSONに写真をBase64で埋めていたため、写真が増えると書き出しも読み込みも
+  // できなくなっていた（1枚0.3MB、埋めると1.33倍。1,000枚で400MB）。
+  // 記録だけなら数百KBで、機種変更で確実に運べる。
   async function buildBackup() {
-    const data = await Store.exportAll();
+    const data = await Store.exportAll({ withPhotos: false });
     const name = `meguri-log-${todayLocal()}.json`;
     const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
-    return { data, name, blob, counts: { visits: data.visits.length, photos: data.photos.length } };
+    const photos = data.visits.reduce((n, v) => n + (v.photoIds || []).length, 0);
+    return { data, name, blob, counts: { visits: data.visits.length, photos: photos } };
+  }
+
+  // 写真だけのZIP。無圧縮なので中身はそのままのJPEG（パソコンでも開ける）。
+  async function buildPhotoZip(onProgress) {
+    const visits = await Store.getAllVisits();
+    const photos = await Store.photosOf(visits);
+    if (!photos.length) return null;
+    const files = photos.map((p) => ({
+      // ★idをそのままファイル名にする★ 戻すときに記録と結び直す手がかりになる
+      name: p.id + extOf(p.type),
+      blob: p.blob,
+    }));
+    const blob = await Zip.write(files, onProgress);
+    return { blob: blob, name: `meguri-photos-${todayLocal()}.zip`, count: photos.length };
+  }
+
+  function extOf(type) {
+    if (!type) return '.jpg';
+    if (type.indexOf('png') >= 0) return '.png';
+    if (type.indexOf('webp') >= 0) return '.webp';
+    if (type.indexOf('heic') >= 0) return '.heic';
+    return '.jpg';
+  }
+
+  function typeOf(name) {
+    const n = String(name).toLowerCase();
+    if (n.endsWith('.png')) return 'image/png';
+    if (n.endsWith('.webp')) return 'image/webp';
+    if (n.endsWith('.heic')) return 'image/heic';
+    return 'image/jpeg';
+  }
+
+  // 写真のZIPを読み込む。★記録が無くても入れる★
+  // 順番はどちらからでもよい（写真→記録の順に読んでも結びつく）。
+  async function importPhotoZip(file) {
+    const list = await Zip.read(file);
+    const put = [];
+    for (const e of list) {
+      const id = e.name.replace(/\.[^.]+$/, '');
+      if (!id) continue;
+      put.push({ id: id, blob: e.blob, size: e.blob.size, type: typeOf(e.name) });
+    }
+    if (!put.length) throw new Error('写真が入っていませんでした');
+    return await Store.putPhotosRaw(put);
   }
 
   // ---------------------------------------------------------------
@@ -5981,9 +6082,41 @@
 
     initPickExport();
 
+    const pb = $('#btn-photos');
+    if (pb) pb.addEventListener('click', async () => {
+      const label = pb.textContent;
+      pb.disabled = true;
+      pb.textContent = 'まとめています…';
+      try {
+        const z = await buildPhotoZip((done, all) => {
+          pb.textContent = 'まとめています… ' + done + '/' + all;
+        });
+        if (!z) { toast('写真がありません'); return; }
+        saveFile(new File([z.blob], z.name, { type: 'application/zip' }));
+        toast(z.count + ' 枚を書き出しました');
+      } catch (e) {
+        toast('書き出せませんでした: ' + e.message);
+      } finally {
+        pb.disabled = false;
+        pb.textContent = label;
+      }
+    });
     $('#btn-import').addEventListener('click', () => $('#import-file').click());
 
     $('#import-file').addEventListener('change', async (e) => {
+      // ★写真のZIPも同じ入口で受ける★ 入口を分けると片方だけ読んで終わる
+      const f0 = e.target.files && e.target.files[0];
+      if (f0 && /\.zip$/i.test(f0.name)) {
+        try {
+          const n = await importPhotoZip(f0);
+          await renderPhotoSize();
+          toast('写真を ' + n + ' 枚読み込みました');
+        } catch (err) {
+          toast('読み込めませんでした: ' + err.message);
+        }
+        e.target.value = '';
+        return;
+      }
       const file = e.target.files[0];
       if (!file) return;
       try {

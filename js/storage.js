@@ -197,6 +197,35 @@ const Store = (() => {
       return out;
     },
 
+    // ★写真だけを取り出す★ バックアップを「記録」と「写真」に分けるため。
+    // 記録のJSONは写真を含まないので数百KBで済み、機種変更で確実に運べる。
+    // 写真はZIPにまとめる（Base64だと1.33倍に膨らむ）。
+    async photosOf(visits) {
+      const out = [];
+      const seen = new Set();
+      for (const v of visits) {
+        for (const pid of (v.photoIds || [])) {
+          if (seen.has(pid)) continue;
+          seen.add(pid);
+          const p = await this.getPhoto(pid);
+          if (p) out.push(p);
+        }
+      }
+      return out;
+    },
+
+    // ZIPから戻した写真を書き戻す。★元のidのまま入れる★
+    // 記録が photoIds で id を指しているので、id が変わると結びつきが切れる。
+    async putPhotosRaw(list) {
+      let n = 0;
+      for (const it of list) {
+        const t = tx(['photos'], 'readwrite');
+        await reqToPromise(t.objectStore('photos').put(it));
+        n++;
+      }
+      return n;
+    },
+
     // 持ち出す覚え書き。lastBackup はその端末の事情なので持ち出さない。
     async exportMeta() {
       const keys = ['passed', 'passedCounts', 'track', 'trackLineOn',

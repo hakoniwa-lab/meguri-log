@@ -191,6 +191,7 @@
         <button type="button" class="stseg__b is-on" data-km="10">10km</button>
         <button type="button" class="stseg__b" data-km="30">30km</button>
       </div>
+      <button type="button" id="btn-near-map" class="btn btn--sub btn--wide">🗺️ いま出ている分を地図に出す</button>
       <div id="near-chips" class="nearchips"></div>
       <div id="near-list" class="list"></div>
     </div>
@@ -305,6 +306,18 @@
         <p class="muted">それでも駄目なとき: 「設定 → スクリーンタイム → コンテンツとプライバシーの制限 → 位置情報サービス」で
           変更が禁止されていないか。<b>ホーム画面のアイコンから開いている</b>場合は Safari の設定は効きません
           （下の質問を見てください）。Chrome を入れると Chrome 側で改めて聞かれるので、それで動くことも確かめられます。</p>
+      </details>
+      <details class="qa">
+        <summary>バックアップが「記録」と「写真」の2つに分かれた</summary>
+        <p>写真を1つのJSONに埋めていたため、写真が増えると書き出しも読み込みもできなく
+          なっていました（写真1枚0.3MB、埋めると1.33倍。1,000枚で400MB）。分けました。</p>
+        <p><b>「記録を保存」</b>は日付・メモ・タグ・集めたものだけで<b>数百KB</b>。
+          機種変更で確実に運べます。<br>
+          <b>「写真を保存」</b>は写真だけをZIPにまとめます。無圧縮なので中身はそのままのJPEGで、
+          パソコンでも普通に開けます。大きさは変わりません。</p>
+        <p><b>戻すときは両方とも「読み込み」に入れてください。</b>順番はどちらからでも
+          かまいません。写真が要らなければ記録だけでも動きます（写真の枠は出ません）。</p>
+        <p class="muted">前の形式（写真入りの1ファイル）も今までどおり読み込めます。</p>
       </details>
       <details class="qa">
         <summary>閉館した美術館・博物館がリストに残っている</summary>
@@ -466,13 +479,20 @@
       <h2>バックアップ</h2>
       <p id="backup-status" class="bkup"></p>
       <div class="btns">
-        <button id="btn-share" class="btn" hidden>バックアップを送る</button>
-        <button id="btn-export" class="btn">ファイルに保存</button>
+        <button id="btn-share" class="btn" hidden>記録を送る</button>
+        <button id="btn-export" class="btn">記録を保存</button>
+        <button id="btn-photos" class="btn btn--sub">写真を保存</button>
         <button id="btn-import" class="btn btn--sub">読み込み</button>
-        <input type="file" id="import-file" accept="application/json,text/plain,.json,.txt" hidden>
+        <input type="file" id="import-file"
+               accept="application/json,application/zip,text/plain,.json,.txt,.zip" hidden>
       </div>
-      <p class="muted">写真も含めて1つのファイルにまとまります。<br>
-        <b>機種変更のときは</b>、古い端末で書き出したファイルを新しい端末で読み込んでください。</p>
+      <p id="photo-size" class="muted"></p>
+      <p class="muted"><b>記録と写真は別のファイルです。</b>
+        「記録を保存」は日付・メモ・タグ・集めたもの（写真は入りません）。数百KBで済みます。<br>
+        「写真を保存」は写真だけをZIPにまとめます。中身はそのままのJPEGなので、
+        パソコンでも開けます。<br>
+        <b>機種変更のときは</b>、両方を書き出して、新しい端末で<b>両方とも読み込んで</b>ください
+        （順番はどちらからでもかまいません）。写真が要らなければ記録だけでも動きます。</p>
     </div>
 
     <!-- 使うタグを自分で間引く。タグは人によって使うものが全く違うので、
@@ -528,12 +548,9 @@
            載ったままで「まだ無いのか」と思わせていた。本当に残っている分だけ書く。 -->
       <h2>これから追加する予定</h2>
       <ul class="todo">
-        <li><b>バックアップを写真とデータで分ける</b>（今は1つのJSONに写真も入れているため、
-          写真が増えると書き出し・読み込みが重くなります。写真1枚あたり約0.3MB、
-          バックアップではさらに1.33倍になります）</li>
         <li>配られているリストを増やす</li>
         <li>ご当地のリスト（もらった資料からの作成）</li>
-        <li>動画の記録（バックアップを写真とデータで分けたあとで）</li>
+        <li>動画の記録（30秒程度まで）</li>
         <li>閉館・廃止したものをリストから外す仕組み</li>
         <li>知多四国霊場など、資料に座標が無くてまだ入れられていない霊場</li>
         <li>御朱印帳ごとの並べ替え（どの帳面に貼ったかで分ける）</li>
@@ -767,7 +784,8 @@
 </footer>
 
 <script src="./vendor/leaflet.js"></script>
-<script src="./js/storage.js"></script>
+  <script src="./js/zip.js"></script>
+  <script src="./js/storage.js"></script>
 <script src="./js/app.js"></script>
 </body>
 </html>
