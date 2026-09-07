@@ -219,6 +219,7 @@
         <input type="search" id="cdet-filter" placeholder="名前で絞り込む">
         <label class="filter__only"><input type="checkbox" id="cdet-todo"> まだの分だけ</label>
       </div>
+      <p id="cdet-hidden" class="muted" hidden></p>
       <div id="cdet-items" class="list"></div>
       <!-- 100件あると上まで戻るのが大変なので、下にも同じものを置く -->
       <div class="cdet__head cdet__head--bottom">
@@ -306,6 +307,23 @@
         <p class="muted">それでも駄目なとき: 「設定 → スクリーンタイム → コンテンツとプライバシーの制限 → 位置情報サービス」で
           変更が禁止されていないか。<b>ホーム画面のアイコンから開いている</b>場合は Safari の設定は効きません
           （下の質問を見てください）。Chrome を入れると Chrome 側で改めて聞かれるので、それで動くことも確かめられます。</p>
+      </details>
+      <details class="qa">
+        <summary>動画も残せますか</summary>
+        <p>残せます。記録画面の<b>「動画（30秒まで）」</b>から。写真と同じ扱いで、
+          記録カードにも見返す画面にも出ます。バックアップは<b>「写真を保存」</b>に一緒に入ります。</p>
+        <p class="muted">★30秒を超えると入りません★ 撮影画面に時間の制限をかける手段が
+          Webにはないため、撮ったあとに長さを見て断る形になっています。
+          100MBを超えるものも入りません。<b>動画は写真の50〜100倍の大きさ</b>です
+          （30秒で15〜30MB、写真は1枚0.3MB）ので、入れすぎるとバックアップが重くなります。</p>
+      </details>
+      <details class="qa">
+        <summary>閉館した場所や、行けなくなった場所をリストから外したい</summary>
+        <p>そのリストを開いて、その行の右にある<b>「⊘」</b>を押してください。
+          <b>数の分母から外れます</b>ので、100%にできるようになります。</p>
+        <p>外したものは消えたわけではありません。リストの上に
+          <b>「対象から外している場所が◯か所（見る・戻す）」</b>と出ますので、そこから戻せます。</p>
+        <p class="muted">同梱のデータそのものは変わりません。この端末での扱いだけが変わります。</p>
       </details>
       <details class="qa">
         <summary>バックアップが「記録」と「写真」の2つに分かれた</summary>
@@ -550,8 +568,6 @@
       <ul class="todo">
         <li>配られているリストを増やす</li>
         <li>ご当地のリスト（もらった資料からの作成）</li>
-        <li>動画の記録（30秒程度まで）</li>
-        <li>閉館・廃止したものをリストから外す仕組み</li>
         <li>知多四国霊場など、資料に座標が無くてまだ入れられていない霊場</li>
         <li>御朱印帳ごとの並べ替え（どの帳面に貼ったかで分ける）</li>
         <li>1年のふりかえりを画像にして、そのまま人に見せられるようにする</li>
@@ -736,12 +752,15 @@
         <button type="button" id="btn-camera" class="btn btn--sub">カメラで撮る</button>
         <button type="button" id="btn-library" class="btn btn--sub">写真から選ぶ</button>
         <button type="button" id="btn-files" class="btn btn--sub">クラウド・ファイルから</button>
+        <button type="button" id="btn-video" class="btn btn--sub">動画（30秒まで）</button>
         <button type="button" id="btn-gspick" class="btn btn--sub btn--slim">まとめて印を付ける</button>
       </div>
       <input type="file" id="photo-camera" accept="image/*" capture="environment" hidden>
       <input type="file" id="photo-library" accept="image/*" multiple hidden>
       <!-- ★accept を付けない★ 付けると写真アプリだけが開き、クラウドが出ないことがある -->
       <input type="file" id="photo-files" multiple hidden>
+      <!-- ★長さはブラウザから止められない★ 撮ったあとに長さを見て断る -->
+      <input type="file" id="photo-video" accept="video/*" hidden>
       <div class="gspickbar" id="gspick-bar" hidden>
         <span id="gspick-count">0枚を選んでいます</span>
         <button type="button" id="gspick-all" class="linkbtn">ぜんぶ</button>

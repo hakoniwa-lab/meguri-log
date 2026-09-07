@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v80';
+  const APP_VERSION = 'v81';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -2009,7 +2009,9 @@
       if (!ph) continue;
       const cell = document.createElement('div');
       cell.className = 'vshot';
-      const img = document.createElement('img');
+      const isVideo = (ph.type || '').startsWith('video/');
+      const img = isVideo ? document.createElement('video') : document.createElement('img');
+      if (isVideo) { img.controls = true; img.playsInline = true; img.preload = 'metadata'; }
       img.src = URL.createObjectURL(ph.blob);
       img.alt = '';
       cell.appendChild(img);
@@ -2403,7 +2405,15 @@
       wrap.className = 'preview__wrap';
       const cell = document.createElement('div');
       cell.className = 'preview__item';
-      const img = document.createElement('img');
+      // ★動画は img では出ない★ 同じ枠に video を置き、秒数を重ねる
+      const img = p.video ? document.createElement('video') : document.createElement('img');
+      if (p.video) {
+        img.muted = true; img.playsInline = true; img.preload = 'metadata';
+        const tag = document.createElement('i');
+        tag.className = 'preview__sec';
+        tag.textContent = p.sec ? p.sec + '秒' : '動画';
+        cell.appendChild(tag);
+      }
       img.src = p.url;
       const del = document.createElement('button');
       del.type = 'button';
@@ -2421,6 +2431,7 @@
       // 写真ごとの御朱印。押すとその1枚だけの内容を決める
       const gs = document.createElement('button');
       gs.type = 'button';
+      gs.hidden = !!p.video;              // 動画に御朱印の印は付けない
       gs.className = 'preview__gs' + (p.gs ? ' is-on' : '');
       gs.textContent = '印';
       gs.title = p.gs ? gsLabel(p.gs) : 'この写真の御朱印を決める';
@@ -2497,6 +2508,42 @@
       $('#edit-bar-text').textContent = (visit.visitedAt || '') + ' の記録を編集中';
     }
     $('.sheet__body').scrollTop = 0;
+  }
+
+  // ★長さはブラウザから止められない★
+  // 撮影画面に「30秒で止める」を頼む手段が無い。撮ったあとに長さを見て断るしかない。
+  const VIDEO_SEC = 30;
+  const VIDEO_MB = 100;
+
+  function videoDuration(file) {
+    return new Promise((res) => {
+      const v = document.createElement('video');
+      v.preload = 'metadata';
+      v.onloadedmetadata = () => { const d = v.duration; URL.revokeObjectURL(v.src); res(d || 0); };
+      v.onerror = () => { URL.revokeObjectURL(v.src); res(-1); };
+      v.src = URL.createObjectURL(file);
+    });
+  }
+
+  async function addVideo(file) {
+    if (!file || !file.type.startsWith('video/')) { toast('動画ではありません'); return; }
+    if (file.size > VIDEO_MB * 1048576) {
+      toast('大きすぎます（' + Math.round(file.size / 1048576) + 'MB）。'
+        + VIDEO_MB + 'MBまでにしてください', 6000);
+      return;
+    }
+    const sec = await videoDuration(file);
+    // ★長さが読めないこともある★ その端末で作れない形式のとき。大きさだけで通す
+    if (sec > VIDEO_SEC + 1) {
+      toast('長すぎます（' + Math.round(sec) + '秒）。' + VIDEO_SEC + '秒までにしてください', 6000);
+      return;
+    }
+    state.pending.push({
+      blob: file, url: URL.createObjectURL(file), name: file.name || '',
+      video: true, sec: sec > 0 ? Math.round(sec) : 0,
+    });
+    renderPending();
+    toast('動画を足しました' + (sec > 0 ? '（' + Math.round(sec) + '秒）' : ''));
   }
 
   async function addPending(fileList) {
@@ -2813,6 +2860,13 @@
     // ★accept を付けない入力を別に用意する★
     // accept="image/*" だと Android は写真アプリだけを開き、クラウドが出ないことがある。
     // 付けなければ書類の選択画面が開き、iCloud Drive・Google ドライブ・Dropbox が並ぶ。
+    const bv = $('#btn-video');
+    if (bv) bv.addEventListener('click', () => $('#photo-video').click());
+    const pv = $('#photo-video');
+    if (pv) pv.addEventListener('change', async (e) => {
+      await addVideo(e.target.files && e.target.files[0]);
+      e.target.value = '';
+    });
     const bf = $('#btn-files');
     if (bf) bf.addEventListener('click', () => $('#photo-files').click());
     const pf = $('#photo-files');
@@ -3361,10 +3415,15 @@
       for (const pid of v.photoIds) {
         const ph = await Store.getPhoto(pid);
         if (!ph) continue;
-        const img = document.createElement('img');
-        img.src = URL.createObjectURL(ph.blob);
-        img.addEventListener('load', function () { URL.revokeObjectURL(img.src); }, { once: true });
-        strip.appendChild(img);
+        // ★動画を img で出さない★ 壊れた画像の印が並ぶだけになる
+        const isVideo = (ph.type || '').startsWith('video/');
+        const el = isVideo ? document.createElement('video') : document.createElement('img');
+        if (isVideo) { el.muted = true; el.playsInline = true; el.preload = 'metadata'; }
+        el.src = URL.createObjectURL(ph.blob);
+        if (!isVideo) {
+          el.addEventListener('load', function () { URL.revokeObjectURL(el.src); }, { once: true });
+        }
+        strip.appendChild(el);
       }
       card.appendChild(strip);
     }
@@ -4386,29 +4445,38 @@
 
   // 同梱のリストに、自分で足したぶんを混ぜる。
   // 「100名城のうち1つ足りない、自分で足したい」に応えるため。分母も増える。
-  function itemsOf(col, extra) {
+  // hide … そのリストで「対象外」にした場所の名前。
+  // ★閉館・廃止したものを分母から外せるようにする★
+  // 出典に閉館が書かれていないと残ってしまい、いつまでも100%にならない。
+  // データを直すのは次の作り直しまで待つしかないので、手元で外せるようにした。
+  function itemsOf(col, extra, hide) {
     const add = (extra && extra[col.id]) || [];
-    if (!add.length) return col.items;
-    const names = new Set(col.items.map((i) => i.name));
-    return col.items.concat(add.filter((i) => !names.has(i.name)).map((i) => {
-      const c = Object.assign({}, i);
-      c.mine = true;                      // 自分で足したものは消せるようにする
-      return c;
-    }));
+    const off = new Set((hide && hide[col.id]) || []);
+    let list = col.items;
+    if (add.length) {
+      const names = new Set(col.items.map((i) => i.name));
+      list = col.items.concat(add.filter((i) => !names.has(i.name)).map((i) => {
+        const c = Object.assign({}, i);
+        c.mine = true;                    // 自分で足したものは消せるようにする
+        return c;
+      }));
+    }
+    return off.size ? list.filter((i) => !off.has(i.name)) : list;
   }
 
-  function collectStats(col, visits, hand, extra) {
-    const items = itemsOf(col, extra);
+  function collectStats(col, visits, hand, extra, hide) {
+    const items = itemsOf(col, extra, hide);
     let n = 0;
     for (const it of items) if (visitedItem(it, visits, (hand || {})[col.id], col.reach)) n++;
     return { done: n, total: items.length };
   }
 
   async function collectMeta() {
-    const [hand, extra] = await Promise.all([
+    const [hand, extra, hide] = await Promise.all([
       Store.getMeta('collectDone'), Store.getMeta('collectExtra'),
+      Store.getMeta('collectHide'),
     ]);
-    return { hand: hand || {}, extra: extra || {} };
+    return { hand: hand || {}, extra: extra || {}, hide: hide || {} };
   }
 
   // ---------------------------------------------------------------
@@ -4618,7 +4686,7 @@
         const b = document.createElement('button');
         b.type = 'button';
         b.className = 'strow';
-        const st = collectStats(sliceCol, visits, meta.hand, meta.extra);
+        const st = collectStats(sliceCol, visits, meta.hand, meta.extra, meta.hide);
         b.innerHTML = '<span class="strow__n">' + escapeHtml(label) + '</span>'
           + (sub ? '<span class="strow__p">' + escapeHtml(sub) + '</span>' : '')
           + '<span class="strow__c"><b>' + st.done + '</b> / ' + st.total + '</span>';
@@ -4667,7 +4735,7 @@
         let done = 0;
         if (loaded) {
           const col = stationCol('line', l.id);
-          if (col) done = collectStats(col, visits, meta.hand, meta.extra).done;
+          if (col) done = collectStats(col, visits, meta.hand, meta.extra, meta.hide).done;
         }
         box.appendChild(row(l.name, l.prefs.map(prefName).join('・'),
           done, l.live, loaded, () => openStationCol('line', l.id)));
@@ -4695,7 +4763,7 @@
       let done = 0;
       if (loaded) {
         const col = stationCol(mode, p.code);
-        if (col) done = collectStats(col, visits, meta.hand, meta.extra).done;
+        if (col) done = collectStats(col, visits, meta.hand, meta.extra, meta.hide).done;
       }
       box.appendChild(row(p.name, '', done, gone ? p.gone : p.live, loaded,
         () => openStationCol(mode, p.code)));
@@ -4754,7 +4822,7 @@
     state.collectMeta = meta;
 
     const card = (col) => {
-      const s = collectStats(col, visits, meta.hand, meta.extra);
+      const s = collectStats(col, visits, meta.hand, meta.extra, meta.hide);
       const pct = s.total ? Math.round((s.done / s.total) * 100) : 0;
       const b = document.createElement('button');
       b.type = 'button';
@@ -4909,7 +4977,7 @@
     const [visits, meta] = await Promise.all([Store.getAllVisits(), collectMeta()]);
     state.collectMeta = meta;
     const hand = meta.hand[col.id] || [];
-    const items = itemsOf(col, meta.extra);
+    const items = itemsOf(col, meta.extra, meta.hide);
     const q = ($('#cdet-filter').value || '').trim().toLowerCase();
     const todoOnly = $('#cdet-todo').checked;
 
@@ -4923,6 +4991,7 @@
     $('#cdet-bar').style.width = pct + '%';
     $('#cdet-text').textContent = done + ' / ' + items.length + ' か所（' + pct + '%）';
 
+    renderHiddenLine(col, meta);
     const box = $('#cdet-items');
     box.innerHTML = '';
     const shown = rows.filter((r) =>
@@ -4978,7 +5047,17 @@
         del.title = 'この項目を消す';
         del.addEventListener('click', () => removeExtra(col, r.it));
         row.appendChild(del);
-      } else if (!r.been) {
+      } else {
+        // 閉館・廃止したものを分母から外す。消すのではなく戻せる形にする
+        const off = document.createElement('button');
+        off.type = 'button';
+        off.className = 'citem__off';
+        off.textContent = '⊘';
+        off.title = 'この場所をこのリストの対象から外す（あとで戻せます）';
+        off.addEventListener('click', () => hideItem(col, r.it));
+        row.appendChild(off);
+      }
+      if (!r.it.mine && !r.been) {
         const rec = document.createElement('button');
         rec.type = 'button';
         rec.className = 'mapsearch__rec';
@@ -4994,6 +5073,55 @@
       }
       box.appendChild(row);
     }
+  }
+
+  async function hideItem(col, item) {
+    if (!confirm(item.name + ' をこのリストの対象から外します。\n'
+      + '（数の分母から外れます。あとで戻せます）')) return;
+    const meta = await collectMeta();
+    const list = meta.hide[col.id] || [];
+    if (!list.includes(item.name)) list.push(item.name);
+    meta.hide[col.id] = list;
+    await Store.setMeta('collectHide', meta.hide);
+    state.collections = null;             // 数を数え直させる
+    await renderCollectItems();
+    toast(item.name + ' を対象から外しました');
+  }
+
+  // ★外したものを見えなくしない★ 戻せることが分かる場所に数を出す
+  async function renderHiddenLine(col, meta) {
+    const el = $('#cdet-hidden');
+    if (!el) return;
+    const list = (meta.hide || {})[col.id] || [];
+    el.hidden = !list.length;
+    if (!list.length) return;
+    el.innerHTML = '';
+    el.appendChild(document.createTextNode('対象から外している場所が ' + list.length + ' か所（'));
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'linkbtn';
+    b.textContent = '見る・戻す';
+    b.addEventListener('click', () => openHidden(col, list));
+    el.appendChild(b);
+    el.appendChild(document.createTextNode('）'));
+  }
+
+  async function openHidden(col, list) {
+    const pick = prompt('対象から外している場所:\n\n'
+      + list.map((n, i) => (i + 1) + '. ' + n).join('\n')
+      + '\n\n戻すものの番号を入れてください（空のまま押すと閉じます）。'
+      + '\nすべて戻すときは 0 を入れてください。');
+    if (pick === null || pick === '') return;
+    const n = parseInt(pick, 10);
+    const meta = await collectMeta();
+    if (n === 0) meta.hide[col.id] = [];
+    else if (n >= 1 && n <= list.length) {
+      meta.hide[col.id] = list.filter((_x, i) => i !== n - 1);
+    } else { toast('番号が違います'); return; }
+    await Store.setMeta('collectHide', meta.hide);
+    state.collections = null;
+    await renderCollectItems();
+    toast('戻しました');
   }
 
   // 手で「行った」を付ける・外す。
@@ -5061,7 +5189,7 @@
     let n = 0, over = false;
     for (const col of cols.concat(custom)) {
       const hand = (meta.hand || {})[col.id];
-      for (const it of itemsOf(col, meta.extra)) {
+      for (const it of itemsOf(col, meta.extra, meta.hide)) {
         if (typeof it.lat !== 'number' || typeof it.lng !== 'number') continue;
         if (!b.contains([it.lat, it.lng])) continue;
         if (n >= COLPIN_MAX) { over = true; break; }
@@ -5179,7 +5307,7 @@
     if (!col) return;
     const [visits, meta] = await Promise.all([Store.getAllVisits(), collectMeta()]);
     const hand = meta.hand[col.id] || [];
-    const items = itemsOf(col, meta.extra);
+    const items = itemsOf(col, meta.extra, meta.hide);
     state.colLayerName = col.name;
     if (state.colLayer) { state.map.removeLayer(state.colLayer); state.colLayer = null; }
     const g = L.layerGroup();
@@ -5496,7 +5624,7 @@
     const dLng = radius / (111000 * Math.max(0.2, Math.cos(o.lat * Math.PI / 180)));
     const hits = [];
     for (const col of cols.concat(custom)) {
-      const items = itemsOf(col, meta.extra);
+      const items = itemsOf(col, meta.extra, meta.hide);
       const hand = (meta.hand || {})[col.id];
       for (const it of items) {
         if (typeof it.lat !== 'number' || typeof it.lng !== 'number') continue;
@@ -5802,6 +5930,10 @@
 
   function extOf(type) {
     if (!type) return '.jpg';
+    if (type.indexOf('quicktime') >= 0) return '.mov';
+    if (type.indexOf('mp4') >= 0) return '.mp4';
+    if (type.indexOf('webm') >= 0) return '.webm';
+    if (type.indexOf('video') >= 0) return '.mp4';
     if (type.indexOf('png') >= 0) return '.png';
     if (type.indexOf('webp') >= 0) return '.webp';
     if (type.indexOf('heic') >= 0) return '.heic';
@@ -5810,6 +5942,9 @@
 
   function typeOf(name) {
     const n = String(name).toLowerCase();
+    if (n.endsWith('.mov')) return 'video/quicktime';
+    if (n.endsWith('.mp4')) return 'video/mp4';
+    if (n.endsWith('.webm')) return 'video/webm';
     if (n.endsWith('.png')) return 'image/png';
     if (n.endsWith('.webp')) return 'image/webp';
     if (n.endsWith('.heic')) return 'image/heic';
