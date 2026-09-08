@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v81';
+  const APP_VERSION = 'v82';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -1346,13 +1346,21 @@
     return out;
   }
 
+  // ★数えるのは「出かけた回数」だけ★
+  // 通販や電話のように出かけていない記録を混ぜると、自宅のピンが何十回訪問になる。
+  // 吹き出しの中では前から分けていたが、ピンの数字と束の一覧が全部を数えていた。
+  function wentCount(items) {
+    return items.filter((it) => !it.athome).length;
+  }
+
   function placeMarker(g) {
     const v = g.items[0];                 // 最新の記録を代表にする
     const t = tagOf(v.tag);
+    const went = wentCount(g.items);
     const icon = L.divIcon({
       className: 'pin',
       html: '<span class="pin__mark">' + t.mark + '</span>'
-        + (g.items.length > 1 ? '<b class="pin__count">' + g.items.length + '</b>' : ''),
+        + (went > 1 ? '<b class="pin__count">' + went + '</b>' : ''),
       iconSize: [34, 34],
       iconAnchor: [17, 34],
       popupAnchor: [0, -30],
@@ -1415,7 +1423,7 @@
       row.className = 'cpop__row';
       row.innerHTML = '<span>' + t.mark + '</span>'
         + '<span class="cpop__n">' + escapeHtml(g.name || v.name || '') + '</span>'
-        + (g.items.length > 1 ? '<small>' + g.items.length + '回</small>' : '');
+        + (wentCount(g.items) > 1 ? '<small>' + wentCount(g.items) + '回</small>' : '');
       row.addEventListener('click', () => {
         state.map.closePopup();
         L.popup({ offset: [0, -30] })
@@ -1494,20 +1502,35 @@
   }
 
   // 同じ場所かどうかの判定。
-  // 名前を付けた場所は「名前が同じなら同じ場所」。GPSは数十mずれるので座標では見ない。
+  // 名前を付けた場所は「名前が同じで、かつ近いなら同じ場所」。
   // 名前が無い記録どうしは、50m以内なら同じ場所とみなす。
   // 名前あり・なしは混ぜない（付けた本人が区別しているため）。
+  //
+  // ★名前だけで同じ場所と決めない★
+  // 「トイレ」「コンビニ」のような一般名を別々の土地で付けると、
+  // 全部が1つのピンにまとまり、いちばん新しい記録の座標へ動いて見えた
+  // （離れた場所の記録が、あとから付けた方の位置に集まってしまう）。
+  // GPSは数十mずれるし、広い施設は端から端まで数百mあるので、
+  // 名前が同じでも 400m 以上離れていたら別の場所として扱う。
+  const NAMED_NEAR = 400;                   // メートル
   function groupByPlace(visits) {
-    const NEAR = 50;                        // メートル
-    const named = new Map();
+    const NEAR = 50;                        // メートル（名前の無い記録どうし）
+    const namedGroups = [];
     const rest = [];
 
     const sorted = visits.slice().sort((a, b) => visitStamp(b).localeCompare(visitStamp(a)));
     for (const v of sorted) {
       const name = (v.place && v.place.name || '').trim();
       if (name) {
-        if (!named.has(name)) named.set(name, { name, lat: v.coords.lat, lng: v.coords.lng, items: [] });
-        named.get(name).items.push(v);
+        // 同じ名前の中から、いちばん近いものを選ぶ
+        let best = null, bd = NAMED_NEAR;
+        for (const g of namedGroups) {
+          if (g.name !== name) continue;
+          const d = distMeters(g.lat, g.lng, v.coords.lat, v.coords.lng);
+          if (d <= bd) { best = g; bd = d; }
+        }
+        if (best) best.items.push(v);
+        else namedGroups.push({ name, lat: v.coords.lat, lng: v.coords.lng, items: [v] });
       } else {
         rest.push(v);
       }
@@ -1518,7 +1541,7 @@
     // 場所の名前ではなく市区町村名で表示されてしまう。
     // そこで、名前なしの記録は近く(50m以内)に名前付きの場所があればそこへ寄せる。
     // 一番近いものを選ぶので、同じ建物に別の店を登録していても取り違えにくい。
-    const groups = Array.from(named.values());
+    const groups = namedGroups;
     const anon = [];
     for (const v of rest) {
       let best = null, bestD = NEAR;
@@ -1597,8 +1620,10 @@
     // 訪問した日時を新しい順に。行をタップするとその回を編集できる
     const list = document.createElement('ul');
     list.className = 'pinpop__times';
-    const SHOW = 6;
-    for (const item of g.items.slice(0, SHOW)) {
+    // ★途中で切らない★
+    // 6件までしか出さず「他◯件」とだけ書いていたので、それ以上は見る手立てが無かった。
+    // 全部並べて、はみ出す分は指で送れるようにする（高さはCSSで止める）。
+    for (const item of g.items) {
       const li = document.createElement('li');
       li.className = 'pinpop__time';
 
@@ -1651,10 +1676,11 @@
     }
     box.appendChild(list);
 
-    if (g.items.length > SHOW) {
+    // はみ出しているときだけ、動かせることを言う（黙って隠れると気づけない）
+    if (g.items.length > 6) {
       const more = document.createElement('div');
       more.className = 'pinpop__more';
-      more.textContent = '他 ' + (g.items.length - SHOW) + ' 件';
+      more.textContent = '全 ' + g.items.length + ' 件（上下に動かせます）';
       box.appendChild(more);
     }
 
@@ -6242,12 +6268,21 @@
       // ★写真のZIPも同じ入口で受ける★ 入口を分けると片方だけ読んで終わる
       const f0 = e.target.files && e.target.files[0];
       if (f0 && /\.zip$/i.test(f0.name)) {
+        // ★黙って読み込まない★ 何も出ないと「読めたのか」が分からない。
+        // 先に中身の数を数えて見せ、押してもらってから入れる。
         try {
+          const list = await Zip.read(f0);
+          const ok = confirm('写真のファイルを読み込みます。\n\n'
+            + '　' + f0.name + '\n'
+            + '　写真 ' + list.length + ' 枚（' + (f0.size / 1048576).toFixed(1) + 'MB）\n\n'
+            + '今ある写真は消えません。同じ写真は上書きされます。\n\n読み込みますか？');
+          if (!ok) { e.target.value = ''; return; }
           const n = await importPhotoZip(f0);
           await renderPhotoSize();
-          toast('写真を ' + n + ' 枚読み込みました');
+          await renderHistory(true);
+          alert('写真を ' + n + ' 枚読み込みました。');
         } catch (err) {
-          toast('読み込めませんでした: ' + err.message);
+          alert('読み込めませんでした: ' + err.message);
         }
         e.target.value = '';
         return;
@@ -6296,7 +6331,13 @@
         const r = await Store.importAll(data, { merge: true });
         await refreshVisited();
         refreshMap(); renderList(); renderProgress(); renderBackupStatus();
-        toast(`読み込みました（記録${r.visits}件・写真${r.photos}枚）`);
+        // ★toastは数秒で消える★ 読み込みは大事な操作なので、押して閉じる形で残す
+        alert('読み込みました。\n\n'
+          + '　記録 ' + r.visits + ' 件\n'
+          + '　場所 ' + r.spots + ' 件\n'
+          + (r.photos ? '　写真 ' + r.photos + ' 枚\n' : '')
+          + (r.photos ? '' : '\n写真は入っていないファイルです。'
+            + '写真も戻すときは、写真のZIPも読み込んでください。'));
       } catch (err) {
         toast('読み込めませんでした: ' + err.message);
       }

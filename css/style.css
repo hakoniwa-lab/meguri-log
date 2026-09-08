@@ -1029,3 +1029,6 @@ a{color:var(--navy)}
 
 /* 記録カードのサムネイルに動画が並ぶことがある */
 .hcard__photos video{width:64px; height:64px; object-fit:cover; border-radius:8px; background:#000; display:block}
+
+/* 何度も来ている場所の記録は全部出す。はみ出す分は指で送る */
+.pinpop__times{max-height:230px; overflow-y:auto; -webkit-overflow-scrolling:touch}
