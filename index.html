@@ -310,6 +310,22 @@
           （下の質問を見てください）。Chrome を入れると Chrome 側で改めて聞かれるので、それで動くことも確かめられます。</p>
       </details>
       <details class="qa">
+        <summary>写真に名前をつけたい／書き出したファイル名を分かるようにしたい</summary>
+        <p>写真の下に出ているファイル名を<b>押すと変えられます</b>。撮った写真は
+          「IMG_0042」のような名前しか付かないので、そこに「浅草寺の御朱印」などと入れておくと、
+          あとから見分けがつきます。</p>
+        <p><b>「写真を保存」で書き出すZIPのファイル名にも使われます。</b>
+          「浅草寺の御朱印__p-xxxx.jpg」の形になります。うしろの記号は写真の見分け番号で、
+          <b>これが無いと読み込んだときに記録と結びつきません</b>ので消さないでください。</p>
+      </details>
+      <details class="qa">
+        <summary>御朱印帳ごとに分けて見たい</summary>
+        <p>御朱印の入力に<b>「貼った御朱印帳」</b>の欄があります。「白い帳面」「四国用」など、
+          自分で分かる名前を入れてください。</p>
+        <p>「記録」タブの<b>「御朱印」</b>に、その帳面が絞り込みボタンとして並びます。
+          種類・直書き・見開き・限定と同じように押して絞れます。</p>
+      </details>
+      <details class="qa">
         <summary>動画も残せますか</summary>
         <p>残せます。記録画面の<b>「動画（30秒まで）」</b>から。写真と同じ扱いで、
           記録カードにも見返す画面にも出ます。バックアップは<b>「写真を保存」</b>に一緒に入ります。</p>
@@ -585,7 +601,6 @@
         <li>配られているリストを増やす</li>
         <li>ご当地のリスト（もらった資料からの作成）</li>
         <li>知多四国霊場など、資料に座標が無くてまだ入れられていない霊場</li>
-        <li>御朱印帳ごとの並べ替え（どの帳面に貼ったかで分ける）</li>
         <li>1年のふりかえりを画像にして、そのまま人に見せられるようにする</li>
         <li>上下線が別なのに1つしか出典に無いSA・PA（姫路・大黒など、裏が取れなかった27件）を分ける</li>
       </ul>
@@ -617,6 +632,8 @@
         <div class="days" id="gp-kind"></div></div>
       <label class="mini2"><small>いただいたものの名称</small>
         <input type="text" id="gp-name" placeholder="例: 御本尊、限定御朱印 など"></label>
+      <label class="mini2"><small>貼った御朱印帳</small>
+        <input type="text" id="gp-book" placeholder="例: 白い帳面、四国用 など"></label>
       <div class="mini2"><small>書き方</small>
         <div class="days" id="gp-write"></div></div>
       <div class="mini2"><small>形式</small>
@@ -714,6 +731,8 @@
           <div class="days" id="gs-kind"></div></div>
         <label class="mini2"><small>いただいたものの名称</small>
           <input type="text" id="gs-name" placeholder="例: 御本尊、限定御朱印 など"></label>
+        <label class="mini2"><small>貼った御朱印帳</small>
+          <input type="text" id="gs-book" placeholder="例: 白い帳面、四国用 など"></label>
         <div class="mini2"><small>書き方</small>
           <div class="days" id="gs-write"></div></div>
         <div class="mini2"><small>形式</small>

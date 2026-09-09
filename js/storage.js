@@ -145,6 +145,17 @@ const Store = (() => {
       return rec.id;
     },
 
+    // 写真の名前だけを書き換える。★中身は触らない★
+    async renamePhoto(id, name) {
+      const rec = await this.getPhoto(id);
+      if (!rec) return false;
+      if (name) rec.name = String(name).slice(0, 120);
+      else delete rec.name;
+      const t = tx(['photos'], 'readwrite');
+      await reqToPromise(t.objectStore('photos').put(rec));
+      return true;
+    },
+
     // 編集で写真を外したときに本体も消す。参照が切れたBlobを溜めないため。
     async deletePhoto(id) {
       const t = tx(['photos'], 'readwrite');

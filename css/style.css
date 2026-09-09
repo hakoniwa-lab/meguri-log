@@ -1032,3 +1032,10 @@ a{color:var(--navy)}
 
 /* 何度も来ている場所の記録は全部出す。はみ出す分は指で送る */
 .pinpop__times{max-height:230px; overflow-y:auto; -webkit-overflow-scrolling:touch}
+
+/* 写真の名前は押して変えられる */
+.preview__name{
+  border:0; background:none; padding:0; font:inherit; text-align:left; cursor:pointer;
+  text-decoration:underline dotted; text-underline-offset:2px;
+}
+.preview__name.is-empty{color:var(--amber); text-decoration:none}

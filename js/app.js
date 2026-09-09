@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v82';
+  const APP_VERSION = 'v83';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -69,6 +69,8 @@
     { key: 'dam',   mark: '🌊', label: 'ダム' },
     { key: 'camp',  mark: '⛺', label: 'キャンプ場' },
     { key: 'light', mark: '💡', label: '灯台' },
+    { key: 'isle',  mark: '🏝️', label: '島' },
+    { key: 'road',  mark: '🏮', label: '街道・宿場' },
     { key: 'onsen', mark: '♨️', label: '温泉・銭湯' },
     { key: 'hosp',  mark: '🏥', label: '病院' },
     { key: 'home',  mark: '🏠', label: '個人宅' },
@@ -2324,7 +2326,8 @@
   // 写真ごとの分は visit.gsPhotos = { 写真のid: {kind,name,write,form,limited} } に持つ。
   function gsLabel(g) {
     if (!g) return '';
-    return [gsKindOf(g), g.name, g.write, g.form, g.limited ? '限定' : '']
+    return [gsKindOf(g), g.name, g.book ? '\uD83D\uDCD3 ' + g.book : '',
+      g.write, g.form, g.limited ? '限定' : '']
       .filter(Boolean).join(' ・ ');
   }
 
@@ -2363,6 +2366,7 @@
     $('#gsphoto-on').checked = !!g;
     $('#gsphoto-fields').hidden = !g;
     $('#gp-name').value = (g && g.name) || '';
+    $('#gp-book').value = (g && g.book) || '';
     $('#gp-limited').checked = !!(g && g.limited);
     $$('#gp-kind .day').forEach((b) => b.classList.toggle('is-on', b.dataset.v === gsKindOf(g)));
     $$('#gp-write .day').forEach((b) => b.classList.toggle('is-on', !!g && b.dataset.v === g.write));
@@ -2391,6 +2395,7 @@
       g = {
         kind: k ? k.dataset.v : GS_KIND[0],
         name: $('#gp-name').value.trim(),
+        book: $('#gp-book').value.trim(),
         write: w ? w.dataset.v : '',
         form: f ? f.dataset.v : '',
         limited: $('#gp-limited').checked,
@@ -2475,13 +2480,16 @@
 
       wrap.appendChild(cell);
       // ★ファイル名を出す★ 縮小した画像は見た目が似ていて、どれがどれか分からない
-      if (p.name) {
-        const nm = document.createElement('small');
-        nm.className = 'preview__name';
-        nm.textContent = p.name;
-        nm.title = p.name;
-        wrap.appendChild(nm);
-      }
+      // ★名前は押して変えられる★
+      // 撮った写真は IMG_0042 のような名前しか付かず、あとから見分けがつかない。
+      // 書き出したZIPのファイル名にもこの名前を使う。
+      const nm = document.createElement('button');
+      nm.type = 'button';
+      nm.className = 'preview__name' + (p.name ? '' : ' is-empty');
+      nm.textContent = p.name || '名前をつける';
+      nm.title = p.name || 'この写真に名前をつける';
+      nm.addEventListener('click', () => renamePending(i));
+      wrap.appendChild(nm);
       box.appendChild(wrap);
     });
   }
@@ -2570,6 +2578,19 @@
     });
     renderPending();
     toast('動画を足しました' + (sec > 0 ? '（' + Math.round(sec) + '秒）' : ''));
+  }
+
+  // 入力中の写真の名前を変える。保存すると写真そのものに残る。
+  async function renamePending(i) {
+    const p = state.pending[i];
+    if (!p) return;
+    const now = prompt('この写真の名前\n（書き出すZIPのファイル名にも使われます）',
+      p.name || '');
+    if (now === null) return;
+    p.name = now.trim().slice(0, 80);
+    // 既に保存されている写真は、その場で書き戻す（保存を押さなくても直る）
+    if (p.existingId) await Store.renamePhoto(p.existingId, p.name);
+    renderPending();
   }
 
   async function addPending(fileList) {
@@ -2759,11 +2780,12 @@
   function setGoshuin(g) {
     g = g || {};
     $('#gs-name').value = g.name || '';
+    $('#gs-book').value = g.book || '';
     $('#gs-limited').checked = !!g.limited;
     $$('#gs-kind .day').forEach((b) => b.classList.toggle('is-on', b.dataset.v === gsKindOf(g)));
     $$('#gs-write .day').forEach((b) => b.classList.toggle('is-on', b.dataset.v === g.write));
     $$('#gs-form .day').forEach((b) => b.classList.toggle('is-on', b.dataset.v === g.form));
-    const any = g.name || g.write || g.form || g.limited;
+    const any = g.name || g.book || g.write || g.form || g.limited;
     const body = $('#goshuin-body'), tg = $('#goshuin-toggle');
     if (any) { body.removeAttribute('hidden'); tg.classList.add('is-open'); }
     else { body.setAttribute('hidden', ''); tg.classList.remove('is-open'); }
@@ -2776,12 +2798,13 @@
     const g = {
       kind: k ? k.dataset.v : '',
       name: $('#gs-name').value.trim(),
+      book: $('#gs-book').value.trim(),
       write: w ? w.dataset.v : '',
       form: f ? f.dataset.v : '',
       limited: $('#gs-limited').checked,
     };
     // 種類だけ選んで他が空、というのは記録として意味がないので拾わない
-    return (g.name || g.write || g.form || g.limited) ? g : null;
+    return (g.name || g.book || g.write || g.form || g.limited) ? g : null;
   }
 
   // 古い記録は sns が文字列1つ。新しい記録は配列。★両方読めるようにする★
@@ -3581,6 +3604,11 @@
       return b;
     };
     for (const k of GS_KIND) if (has('kind', k)) chips.appendChild(mk('kind', k, k));
+    // ★どの帳面に貼ったかで分ける★
+    // 御朱印帳を何冊も使っていると、종類や書き方より「どの帳面か」で探すことが多い。
+    // 帳面の名前は「いただいたものの名称」に書いてもらうのではなく、
+    // 御朱印帳そのものの記録（種類＝御朱印帳）の名前を拾う。
+    for (const bk of gsBooks(rows)) chips.appendChild(mk('book', bk, '\uD83D\uDCD3 ' + bk));
     for (const w of GS_WRITE) if (has('write', w)) chips.appendChild(mk('write', w, w));
     for (const fm of GS_FORM) if (has('form', fm)) chips.appendChild(mk('form', fm, fm));
     if (rows.some((r) => r.g.limited)) chips.appendChild(mk('limited', true, '限定'));
@@ -3641,7 +3669,18 @@
 
   function gsFieldOf(g, key) {
     if (key === 'kind') return gsKindOf(g);
+    if (key === 'book') return (g.book || '').trim();
     return g[key] || '';
+  }
+
+  // これまでに使った御朱印帳の名前を集める（多い順）
+  function gsBooks(rows) {
+    const c = new Map();
+    for (const r of rows) {
+      const b = (r.g.book || '').trim();
+      if (b) c.set(b, (c.get(b) || 0) + 1);
+    }
+    return Array.from(c.entries()).sort((a, b) => b[1] - a[1]).map((e) => e[0]);
   }
 
   function renderYear(box, all) {
@@ -4303,6 +4342,8 @@
     { id: 'taki100',    file: './data/collections/taki100.json' },
     { id: 'hyakumeizan', file: './data/collections/hyakumeizan.json' },
     { id: 'lighthouse50', file: './data/collections/lighthouse50.json' },
+    { id: 'camp',             file: './data/collections/camp.json' },
+    { id: 'park100',          file: './data/collections/park100.json' },
     { id: 'dam',              file: './data/collections/dam.json' },
     { id: 'onsen',            file: './data/collections/onsen.json' },
     { id: 'airport',          file: './data/collections/airport.json' },
@@ -5946,12 +5987,25 @@
     const photos = await Store.photosOf(visits);
     if (!photos.length) return null;
     const files = photos.map((p) => ({
-      // ★idをそのままファイル名にする★ 戻すときに記録と結び直す手がかりになる
-      name: p.id + extOf(p.type),
+      // ★名前の後ろに必ず id を付ける★
+      // 戻すときは id で記録と結び直すので、id を落とすと写真が迷子になる。
+      // 「名前__id.jpg」の形にして、人が見て分かる名前を前に出す。
+      name: photoFileNameOf(p),
       blob: p.blob,
     }));
     const blob = await Zip.write(files, onProgress);
     return { blob: blob, name: `meguri-photos-${todayLocal()}.zip`, count: photos.length };
+  }
+
+  // ファイル名に使えない文字を落とす。長すぎる名前も切る
+  function safeName(s) {
+    return String(s || '').replace(/[\\/:*?"<>|]/g, '_')
+      .replace(/\s+/g, ' ').trim().slice(0, 60);
+  }
+
+  function photoFileNameOf(p) {
+    const nm = safeName(p.name).replace(/\.[^.]*$/, '');   // 元の拡張子は落とす
+    return (nm ? nm + '__' : '') + p.id + extOf(p.type);
   }
 
   function extOf(type) {
@@ -5983,9 +6037,16 @@
     const list = await Zip.read(file);
     const put = [];
     for (const e of list) {
-      const id = e.name.replace(/\.[^.]+$/, '');
+      const base = e.name.replace(/\.[^.]+$/, '');
+      if (!base) continue;
+      // 「名前__id」の形。__ が無ければ全体が id（v82以前に書き出したZIP）
+      const k = base.lastIndexOf('__');
+      const id = k >= 0 ? base.slice(k + 2) : base;
+      const nm = k >= 0 ? base.slice(0, k) : '';
       if (!id) continue;
-      put.push({ id: id, blob: e.blob, size: e.blob.size, type: typeOf(e.name) });
+      const rec = { id: id, blob: e.blob, size: e.blob.size, type: typeOf(e.name) };
+      if (nm) rec.name = nm;
+      put.push(rec);
     }
     if (!put.length) throw new Error('写真が入っていませんでした');
     return await Store.putPhotosRaw(put);
