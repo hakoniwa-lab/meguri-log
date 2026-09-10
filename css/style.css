@@ -1039,3 +1039,8 @@ a{color:var(--navy)}
   text-decoration:underline dotted; text-underline-offset:2px;
 }
 .preview__name.is-empty{color:var(--amber); text-decoration:none}
+
+/* メール登録フォーム */
+.lead-form{display:flex;gap:8px;margin-top:12px}
+.lead-form__input{flex:1;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink);font:inherit;font-size:14px}
+@media (max-width:480px){.lead-form{flex-direction:column}}
