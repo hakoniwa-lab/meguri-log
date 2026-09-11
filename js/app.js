@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v87';
+  const APP_VERSION = 'v88';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -1766,6 +1766,32 @@
   // ---------------------------------------------------------------
   // 現在地
   // ---------------------------------------------------------------
+  // ★記録する位置は、数秒見て一番確かなものを使う★（v88）
+  // 最初に返ってくる位置は基地局やWi-Fiからの粗いもので、建物の中だと百m単位でずれる
+  // （以前は1分前の位置でもそのまま使っていた）。何回か取って誤差のいちばん小さいものを使い、
+  // 十分に確か（goodAcc 以内）になったらそこで決める。
+  function bestFix(maxMs, goodAcc, onProgress) {
+    return new Promise((resolve, reject) => {
+      let best = null, lastErr = null, done = false, id = null, tm = null;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        if (id !== null) navigator.geolocation.clearWatch(id);
+        clearTimeout(tm);
+        if (best) resolve(best); else reject(lastErr || { code: 3 });
+      };
+      id = navigator.geolocation.watchPosition((pos) => {
+        if (!best || pos.coords.accuracy < best.coords.accuracy) best = pos;
+        if (onProgress) onProgress(Math.round(best.coords.accuracy));
+        if (best.coords.accuracy <= goodAcc) finish();
+      }, (err) => {
+        lastErr = err;
+        if (err.code === 1) finish();      // 許可されていない。待っても変わらない
+      }, { enableHighAccuracy: true, maximumAge: 0, timeout: maxMs + 5000 });
+      tm = setTimeout(finish, maxMs);
+    });
+  }
+
   function locate(openRecord) {
     const btn = openRecord ? $('#btn-here-record') : $('#btn-here');
     const label = btn.textContent;
@@ -1777,7 +1803,10 @@
     btn.textContent = '取得中…';
     const restore = () => { btn.disabled = false; btn.textContent = label; };
 
-    navigator.geolocation.getCurrentPosition(
+    // 記録するときは最大8秒・誤差20m以内で決める。見に行くだけなら4秒・50m
+    bestFix(openRecord ? 8000 : 4000, openRecord ? 20 : 50, (acc) => {
+      btn.textContent = '取得中… 誤差' + acc + 'm';
+    }).then(
       async (pos) => {
         restore();
         const { latitude: lat, longitude: lng } = pos.coords;
@@ -1829,8 +1858,7 @@
         }
         toast(err.code === 3 ? '現在地の取得に時間がかかりすぎました。空の見える場所でもう一度'
                              : '現在地を取得できませんでした');
-      },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+      }
     );
   }
 
@@ -4294,9 +4322,17 @@
   // Screen Wake Lock で画面を消させないので、車のホルダーに置く・電車で移動する
   // といった使い方なら実用になる。他のアプリに切り替えると止まる。
   //
-  // 精度は要らない（市区町村が分かればよい）。enableHighAccuracy を false にすると
-  // GPSを回しっぱなしにせず基地局・Wi-Fiで済ませられるので、電池の持ちが全く違う。
-  const TRACK_OPTS = { enableHighAccuracy: false, maximumAge: 15000, timeout: 30000 };
+  // ★v88でGPSを使うようにした★
+  // もとは電池のために基地局・Wi-Fiの位置（enableHighAccuracy:false）で済ませていたが、
+  // 建物の中では数十〜数百m飛び、印が跳ね回って線がギザギザになった
+  // （隣の市区町村を「通った」ことにもなる）。GPSにすると誤差の数字がまともに出るので、
+  // 粗い位置を見分けて捨てられる。画面を点けたままにする時点で電池は画面が一番食うので、差は小さい。
+  const TRACK_OPTS = { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 };
+  // これより粗い位置（誤差の半径、m）は、印にも線にも判定にも使わない。
+  // 外でGPSが届いていればたいてい5〜20m、ビルの谷間でも40m以内に収まる。
+  const FIX_MAX_ACC = 40;
+  // これより速い移動（m/秒。約200km/h）は位置が飛んだとみなす
+  const FIX_MAX_SPEED = 55;
   // 前回から動いていないときに何度も判定しない距離（市区町村の塗り分け用）
   const TRACK_MIN_MOVE = 150;
 
@@ -4404,6 +4440,11 @@
     state.tracking = true;
     state.trackCount = 0;
     state.lastTrack = null;
+    state.goodFix = null;          // 前回止めたところの位置を引きずらない
+    state.jumpFix = null;
+    state.fixWin = [];
+    state.moving = false;
+    state.fixRough = false;
     await grabWakeLock();
     // 画面を切り替えて戻ると Wake Lock は外れる。戻ったら取り直す
     document.addEventListener('visibilitychange', onTrackVisibility);
@@ -4437,10 +4478,80 @@
     if (state.tracking && document.visibilityState === 'visible') grabWakeLock();
   }
 
+  // ★その位置を信じてよいか★（v88）
+  // 建物の中では、止まっていても位置が数十〜数百m飛ぶ。そのままつなぐと印が跳ね回り、線がギザギザになった。
+  //  - 誤差が FIX_MAX_ACC より大きい位置は使わない
+  //  - ありえない速さで離れた位置は飛びとみなす。ただし次もその近くなら信じる（トンネルを抜けた等）
+  //  - ★動いているかは、直近20秒の位置の並び方で決める★
+  //    走っていれば位置は一方向に進むので、「出発点から今までの距離」が「たどった道のりの合計」に近い。
+  //    屋内のぶれは行ったり来たりするので、道のりばかり増えて距離は増えない。
+  //    距離25m以上・道のりの7割以上 のときだけ「動いている」とみなす。
+  //  ★1回ずつの位置で決めない★ 最初は「誤差の円の外で、次も同じ向きなら動き出し」としたが、
+  //    一度動いたと決まると後は全部通ってしまい、屋内のぶれを流すとギザギザが12〜30点残った。
+  const FIX_WIN_MS = 20000;
+  const FIX_WIN_MIN = 5;
+  const MOVE_MIN_M = 25;
+  const MOVE_RATIO = 0.7;
+  function judgeFix(pos) {
+    const c = pos.coords;
+    const acc = typeof c.accuracy === 'number' ? c.accuracy : 9999;
+    const p = { lat: c.latitude, lng: c.longitude, t: pos.timestamp || Date.now(), acc: acc };
+    if (acc > FIX_MAX_ACC) return { ok: false, why: 'rough', acc: acc };
+    const win = state.fixWin || (state.fixWin = []);
+    const prev = win.length ? win[win.length - 1] : null;
+    if (prev) {
+      const dt = Math.max(1, (p.t - prev.t) / 1000);
+      if (distMeters(prev.lat, prev.lng, p.lat, p.lng) / dt > FIX_MAX_SPEED) {
+        const j = state.jumpFix;
+        if (!(j && distMeters(j.lat, j.lng, p.lat, p.lng) < Math.max(acc, 60))) {
+          state.jumpFix = p;
+          return { ok: false, why: 'jump', acc: acc };
+        }
+        win.length = 0;           // 飛んだ先が本当だった。そこから数え直す
+        state.moving = false;
+      }
+    }
+    state.jumpFix = null;
+    win.push(p);
+    while (win.length > 1 && p.t - win[0].t > FIX_WIN_MS) win.shift();
+    // 最初の1回は、居場所を出すために使う（線は動き出してから）
+    if (!state.goodFix) {
+      state.goodFix = p;
+      return { ok: true, acc: acc, pts: [p] };
+    }
+    if (win.length < FIX_WIN_MIN) return { ok: false, why: 'wait', acc: acc };
+    let path = 0;
+    for (let i = 1; i < win.length; i++) {
+      path += distMeters(win[i - 1].lat, win[i - 1].lng, win[i].lat, win[i].lng);
+    }
+    const net = distMeters(win[0].lat, win[0].lng, p.lat, p.lng);
+    if (!(net >= MOVE_MIN_M && path > 0 && net / path >= MOVE_RATIO)) {
+      state.moving = false;
+      return { ok: false, why: 'still', acc: acc };
+    }
+    // ★動き出しに気づく前の点はつながない★
+    // 窓の中の点もさかのぼってつないでいたら、窓に残っていた屋内のぶれが2〜3点入り、
+    // 走り出しのところだけギザギザになった。出だしの百mほどが欠ける方がよい。
+    state.moving = true;
+    state.goodFix = p;
+    return { ok: true, acc: acc, pts: [p] };
+  }
+
   async function onTrackPos(pos) {
     if (!state.tracking) return;
+    const j = judgeFix(pos);
+    // 位置があいまいなときは、それを帯に出す（止まったように見えて不安にならないように）
+    const rough = !j.ok && j.why === 'rough';
+    if (rough !== !!state.fixRough || (rough && Math.abs((state.fixAcc || 0) - j.acc) > 20)) {
+      state.fixRough = rough;
+      state.fixAcc = Math.round(j.acc);
+      renderTrackBar();
+    }
+    if (!j.ok) return;
     const lat = pos.coords.latitude, lng = pos.coords.longitude;
     state.lastFix = { lat: lat, lng: lng };
+    // 線には、動き出しに気づいたときの窓の中の点もまとめて入れる
+    const feed = j.pts || [{ lat: lat, lng: lng, t: Date.now() }];
     // 自分の居場所の印も動かす（追従していなくても、どこに居るかは要る）
     if (state.here) state.map.removeLayer(state.here);
     state.here = L.circleMarker([lat, lng], {
@@ -4449,9 +4560,14 @@
     if (state.follow) state.map.setView([lat, lng], Math.max(state.map.getZoom(), 15));
     // ★線は市区町村の判定より細かく拾う★
     // 150mおきだと曲がり角が全部切り落とされて、道の形にならない。
-    const tail = state.track.length ? state.track[state.track.length - 1] : null;
-    if (!tail || distMeters(tail[0], tail[1], lat, lng) >= TRACK_LINE_MIN) {
-      state.track.push([Math.round(lat * 1e6) / 1e6, Math.round(lng * 1e6) / 1e6, Date.now()]);
+    let added = false;
+    for (const q of feed) {
+      const tail = state.track.length ? state.track[state.track.length - 1] : null;
+      if (tail && distMeters(tail[0], tail[1], q.lat, q.lng) < TRACK_LINE_MIN) continue;
+      state.track.push([Math.round(q.lat * 1e6) / 1e6, Math.round(q.lng * 1e6) / 1e6, q.t || Date.now()]);
+      added = true;
+    }
+    if (added) {
       if (state.track.length > TRACK_MAX_PTS) {
         state.track.splice(0, state.track.length - TRACK_MAX_PTS);
       }
@@ -4500,8 +4616,10 @@
     const n = state.trackCount || 0;
     bar.innerHTML = '<span class="trackbar__dot"></span>'
       + '<b>移動を記録中</b>'
-      + '<small>' + (n ? '新しく ' + n + ' か所' : 'まだ新しい場所はありません')
-      + (state.trackLast ? '（' + escapeHtml(state.trackLast) + '）' : '') + '</small>'
+      + '<small>' + (state.fixRough
+        ? '位置があいまいなので待っています（誤差 約' + state.fixAcc + 'm）'
+        : (n ? '新しく ' + n + ' か所' : 'まだ新しい場所はありません')
+          + (state.trackLast ? '（' + escapeHtml(state.trackLast) + '）' : '')) + '</small>'
       + '<i class="trackbar__stop">やめる</i>';
     const stop = bar.querySelector('.trackbar__stop');
     if (stop) stop.addEventListener('click', (e) => { e.stopPropagation(); stopTracking(); });
@@ -4704,7 +4822,37 @@
   // 名前の比べ方。空白と括弧だけ落として、あとはそのまま比べる。
   const nameKey = (s) => String(s || '').replace(/[\s　（）()「」『』]/g, '');
 
-  function visitedItem(item, visits, hand, reach) {
+  // ★近くを通っただけの記録では「行った」にしない★（v88）
+  // 400m以内の記録なら名前もタグも見ずに「行った」にしていたため、
+  // 仕事の「待機場所」から178mの航空科学博物館、「羽田クロノゲート物流棟」から355mの
+  // 日本航空安全啓発センター、トイレから166mの八幡神社…に✓が付いていた
+  // （使っている人の記録217件で、自動の✓14件が14件とも行っていない所だった）。
+  //
+  // 用事の記録（仕事・買い物・コンビニ・食事・ガソリン・駐車場・トイレ・病院・宿・個人宅）は、
+  // 名前の無い記録でも距離では数えない。
+  const ERRAND_TAGS = new Set(['work', 'shop', 'conv', 'food', 'gas', 'park', 'toilet', 'hosp', 'stay', 'home']);
+  // 目的が広いタグ（旅行・遊び・その他）と、タグの無い記録は、どのリストにも数える
+  const ANY_TAGS = new Set(['', 'trip', 'play', 'other']);
+  // 同じ仲間として数えるタグ（史跡には城跡・寺の跡・神社が入る）
+  const KIN_TAGS = { hist: ['castle', 'temple', 'shrine'], castle: ['hist'] };
+  function tagFits(vtag, ctag) {
+    const t = vtag || '';
+    if (ERRAND_TAGS.has(t)) return false;
+    if (ANY_TAGS.has(t) || !ctag) return true;
+    return t === ctag || (KIN_TAGS[ctag] || []).indexOf(t) >= 0;
+  }
+  // 名前を付けた記録が、リストの場所のことか。
+  // ★部分一致だけでは決めない★（佐倉城を記録して3.9km先の本佐倉城に✓が付いたことがある）。
+  // 含む関係にあって、しかも近いときだけ（「麻賀多神社 佐倉藩鎮守」→「麻賀多神社」）。
+  function nameRelated(a, b) {
+    if (!a || !b || a.length < 2 || b.length < 2) return false;
+    return a.indexOf(b) >= 0 || b.indexOf(a) >= 0;
+  }
+
+  // col … そのリスト（距離の幅 reach とタグ tag を見る）
+  function visitedItem(item, visits, hand, col) {
+    const reach = col && col.reach;
+    const ctag = (col && col.tag) || '';
     // リストごとに許容する距離を変えられる。駅は密度が高いので狭くする。
     const near = (reach && reach.near) || COLLECT_NEAR;
     const nearNamed = (reach && reach.nearNamed) || COLLECT_NEAR_NAMED;
@@ -4712,32 +4860,40 @@
     for (const v of visits) {
       const vn = nameKey(v.place && v.place.name);
       const same = !!(nm && vn && nm === vn);
+      const hasPos = !!(v.coords && typeof v.coords.lat === 'number');
+      const d = hasPos ? distMeters(v.coords.lat, v.coords.lng, item.lat, item.lng) : Infinity;
       // ★位置が市区町村の中心までしか分かっていないものは、距離で数えない★
       // 本の目次には番地が無く、地図にも載っていない小さな寺がある。
       // その分は市役所のあたりに落ちている。近くを通っただけで札所に行ったことに
-      // なってしまうので、名前が一致したときだけ数える。
+      // なってしまうので、名前が一致したときだけ数える（同じ名前の別の寺を避けるため20km以内）。
       if (item.approx) {
-        if (same) return 'auto';
+        if (same && (!hasPos || d <= 20000)) return 'auto';
         continue;
       }
       // ★近いものが密に並ぶリストは、距離で数えると巻き添えが出る★
       // 配送先のリストは同じ工場の「4C荷受」「2D荷受」が数十m間隔で並ぶ。
       // 400mでは1か所記録すると最大15件にチェックが付き、逆に狭くしても
       // （20mでも）無くならない。距離をやめ、名前が一致したときだけ数える。
+      // ★ただし遠い同じ名前は別の場所★ 寺の宗派のリストには同じ名前の寺が全国にある。
       if (item.exact) {
+        if (same && (!hasPos || d <= nearNamed)) return 'auto';
+        continue;
+      }
+      if (!hasPos) {
+        // 座標の無い記録（市区町村をタップしただけ等）は名前だけで見るしかない
         if (same) return 'auto';
         continue;
       }
-      if (v.coords && typeof v.coords.lat === 'number') {
-        // ★名前は「距離をどこまで許すか」にだけ使う★
-        // 以前は「片方の名前がもう片方に含まれていれば同じ場所」としていたが、
-        // それだと 佐倉城（100名城）を記録しただけで 本佐倉城（続100名城）にも
-        // チェックが付いた。3.9km離れた別の城で、本人の指摘で発覚した。
-        // 「〜城」「〜寺」は前に字が付くだけで別の場所になるので、部分一致は使わない。
-        const d = distMeters(v.coords.lat, v.coords.lng, item.lat, item.lng);
-        if (d <= (same ? nearNamed : near)) return 'auto';
-      } else if (same) {
-        // 座標の無い記録（市区町村をタップしただけ等）は名前だけで見るしかない
+      if (same) {
+        if (d <= nearNamed) return 'auto';
+        continue;
+      }
+      if (d > near) continue;
+      if (vn) {
+        // 名前を付けた記録は、名前がつながるときだけ（「待機場所」は博物館ではない）
+        if (nameRelated(nm, vn)) return 'auto';
+      } else if (tagFits(v.tag, ctag)) {
+        // 名前の無い記録は、タグが合うときだけ（仕事・コンビニ・トイレは数えない）
         return 'auto';
       }
     }
@@ -4770,7 +4926,7 @@
   function collectStats(col, visits, hand, extra, hide) {
     const items = itemsOf(col, extra, hide);
     let n = 0;
-    for (const it of items) if (visitedItem(it, visits, (hand || {})[col.id], col.reach)) n++;
+    for (const it of items) if (visitedItem(it, visits, (hand || {})[col.id], col)) n++;
     return { done: n, total: items.length };
   }
 
@@ -5286,7 +5442,7 @@
 
     let done = 0;
     const rows = items.map((it) => {
-      const been = visitedItem(it, visits, hand, col.reach);
+      const been = visitedItem(it, visits, hand, col);
       if (been) done++;
       return { it: it, been: been };
     });
@@ -5526,7 +5682,7 @@
         if (!b.contains([it.lat, it.lng])) continue;
         if (n >= COLPIN_MAX) { over = true; break; }
         n++;
-        const been = visitedItem(it, visits, hand, col.reach);
+        const been = visitedItem(it, visits, hand, col);
         g.addLayer(colPin(it, {
           radius: been ? 4 : 7,
           color: been ? '#9aa7b8' : '#c0392b',
@@ -5735,7 +5891,7 @@
     // 「吹き出しが出ないで即登録みたいになる」と言われた。ほかの印と同じ吹き出しにそろえ、
     // 記録するかどうかは吹き出しの中のボタンで決めてもらう。
     for (const it of items) {
-      const been = visitedItem(it, visits, hand, col.reach);
+      const been = visitedItem(it, visits, hand, col);
       g.addLayer(colPin(it, {
         radius: been ? 5 : 8,
         color: been ? '#9aa7b8' : '#c0392b',
@@ -6058,7 +6214,7 @@
         if (Math.abs(it.lat - o.lat) > dLat || Math.abs(it.lng - o.lng) > dLng) continue;
         const d = distMeters(o.lat, o.lng, it.lat, it.lng);
         if (d > radius) continue;
-        if (visitedItem(it, visits, hand, col.reach)) continue;
+        if (visitedItem(it, visits, hand, col)) continue;
         hits.push({ d: d, it: it, col: col });
       }
     }
