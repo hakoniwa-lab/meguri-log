@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v86';
+  const APP_VERSION = 'v87';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -5608,6 +5608,57 @@
     return box;
   }
 
+  // ★前に取り込んだ配布リストにもリンクを出す★
+  // 取り込んだリストは端末に写したもので、あとから配布側にリンクを足しても写しには入らない
+  // （v86 まで取り込むときに wiki・web を捨ててもいた）。
+  // 吹き出しを開いたときに、配布の元ファイルから同じ名前の場所を探して足す。1本につき1回だけ取りに行く。
+  // ★id だけでは探せない★ 配布ファイルに id が無かったリスト（日本百観音）は、
+  // 取り込んだときに「c-…」の id が付いている。目録の名前でも元ファイルを探す。
+  let sharedCatalog = null;
+  async function sharedFileOf(col) {
+    if (!sharedCatalog) {
+      try {
+        const r = await fetch(CATALOG_URL);
+        if (!r.ok) return null;
+        sharedCatalog = (await r.json()).lists || [];
+      } catch (e) {
+        return null;            // 圏外
+      }
+    }
+    const nm = String(col.name || '').replace(/（読み込み）$/, '');
+    const e = sharedCatalog.find((x) => x.id === col.id || x.name === nm);
+    return e && /^\.\/data\/shared\/[a-z0-9_]+\.json$/.test(e.file) ? e.file : null;
+  }
+
+  // 取り込んだ写しは位置をそのまま持っているので、小数4桁（約10m）までそろえば同じ場所
+  function linkKey(i) {
+    return i.name + '|' + Number(i.lat).toFixed(4) + ',' + Number(i.lng).toFixed(4);
+  }
+
+  const sharedLinkCache = new Map();
+  async function sharedLinksOf(col) {
+    const file = await sharedFileOf(col);
+    if (!file) return null;     // 自分で作ったリストは対象外
+    if (sharedLinkCache.has(file)) return sharedLinkCache.get(file);
+    let map = null;
+    try {
+      const r = await fetch(file);
+      if (r.ok) {
+        const d = await r.json();
+        map = new Map();
+        for (const i of ((d.collection || {}).items || [])) {
+          // ★名前だけで引かない★ 日本百観音には清水寺が2つある（京都と千葉県いすみ市）。
+          // 名前だけだと京都の清水寺にいすみ市の記事が付いた。位置も合わせて引く。
+          if (i.wiki || i.web) map.set(linkKey(i), { wiki: i.wiki, web: i.web });
+        }
+      }
+    } catch (e) {
+      return null;              // 圏外。覚えずに次にまた試す
+    }
+    sharedLinkCache.set(file, map);
+    return map;
+  }
+
   function collectPinPopup(it, col, been) {
     const wrap = document.createElement('div');
     wrap.className = 'colpop';
@@ -5615,7 +5666,14 @@
       + '<small>' + escapeHtml((col.mark || '') + ' ' + col.name)
       + (been ? '　✓ 記録があります' : '　まだです') + '</small>'
       + (it.note ? '<small>' + escapeHtml(it.note) + '</small>' : '');
-    wrap.appendChild(linkChips(it));
+    const chips = linkChips(it);
+    wrap.appendChild(chips);
+    if (!col.builtin && !it.wiki && !it.web) {
+      sharedLinksOf(col).then((map) => {
+        const x = map && map.get(linkKey(it));
+        if (x && chips.parentNode) chips.replaceWith(linkChips(Object.assign({}, it, x)));
+      });
+    }
     if (!been) {
       const rec = document.createElement('button');
       rec.type = 'button';
@@ -5886,7 +5944,16 @@
     // 座標が無いものは地図に出せないので入れない
     // ★もらったリストのメモを捨てない★
     // 配送先のように「どこで何をするか」が書いてあると、名前だけでは用が足りない。
-    const items = c.items
+    const items = sharedItems(c.items);
+    if (!items.length) { toast('中身がありませんでした'); return; }
+    await installCollection(c, items);
+  }
+
+  // もらったリストの場所を、自分のリストに写す。
+  // ★写し方はここ1か所★ ファイルからの読み込みと「配られているリスト」からの取り込みで
+  // 別々に書いていたため、片方だけ直してリンクが落ちたままになった（v87で気づいた）。
+  function sharedItems(list) {
+    return list
       .filter((i) => typeof i.lat === 'number' && typeof i.lng === 'number' && i.name)
       .map((i) => {
         const o = { name: i.name, lat: i.lat, lng: i.lng };
@@ -5894,10 +5961,11 @@
         if (typeof i.note === 'string' && i.note) o.note = i.note.slice(0, 300);
         if (typeof i.address === 'string' && i.address) o.address = i.address.slice(0, 200);
         if (i.exact) o.exact = true;        // 近くの別の場所を巻き込まない印
+        // 調べ先のリンク（v87〜）。★web は http(s) のものだけ写す★（javascript: などを入れない）
+        if (i.wiki === 1 || (typeof i.wiki === 'string' && i.wiki && i.wiki.length <= 150)) o.wiki = i.wiki;
+        if (typeof i.web === 'string' && /^https?:\/\//i.test(i.web) && i.web.length <= 400) o.web = i.web;
         return o;
       });
-    if (!items.length) { toast('中身がありませんでした'); return; }
-    await installCollection(c, items);
   }
 
   // ファイルからでも配布からでも、自分のリストとして足すところは同じ
@@ -6118,16 +6186,7 @@
           const d = await r.json();
           const c = d && d.collection;
           if (!c || !Array.isArray(c.items)) throw new Error('形が違う');
-          const items = c.items
-            .filter((i) => typeof i.lat === 'number' && typeof i.lng === 'number' && i.name)
-            .map((i) => {
-              const o = { name: i.name, lat: i.lat, lng: i.lng };
-              if (i.no) o.no = i.no;
-              if (i.note) o.note = String(i.note).slice(0, 300);
-              if (i.address) o.address = String(i.address).slice(0, 200);
-              if (i.exact) o.exact = true;
-              return o;
-            });
+          const items = sharedItems(c.items);
           const done = await installCollection(c, items);
           b.textContent = done ? '取り込みずみ' : '取り込む';
           b.disabled = done;
