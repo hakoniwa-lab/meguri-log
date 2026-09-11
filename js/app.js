@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v85';
+  const APP_VERSION = 'v86';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -43,6 +43,7 @@
     { key: 'trip',  mark: '🧳', label: '旅行' },
     { key: 'stay',  mark: '🏨', label: '宿・ホテル' },
     { key: 'castle',mark: '🏯', label: '城' },
+    { key: 'hist',  mark: '🏺', label: '史跡・遺跡' },
     { key: 'statn', mark: '🚉', label: '駅' },
     { key: 'air',   mark: '✈️', label: '空港' },
     { key: 'port',  mark: '⛴️', label: '港・フェリー' },
@@ -304,6 +305,11 @@
     window.addEventListener('orientationchange', () => setTimeout(fitMapHeight, 250));
 
     initLayersPanel();
+    // ★吹き出しを開いている間は、右下の丸いボタンを引っ込める★
+    // 地図が小さいスマホでは、吹き出しの「道のりを見る」の上に「表示」「ここを記録」が重なって押せなかった。
+    // 吹き出しを閉じれば（地図を触れば）戻る。
+    state.map.on('popupopen', () => document.body.classList.add('is-popup'));
+    state.map.on('popupclose', () => document.body.classList.remove('is-popup'));
     // ズームが変わるとピンのまとめ方も変わる。読み直しはせず描き直すだけ
     state.map.on('zoomend', () => drawPins());
 
@@ -3506,59 +3512,279 @@
   }
 
   // 町丁目は塗り分けができない代わりに、行った場所を一覧で見られるようにする
-  function renderChomeList(box, all) {
-    const map = new Map();
+  //
+  // ★その市区町村の町を全部並べる（v86〜）★
+  // 行った町だけでなく、まだ行っていない町も並べて、行った所に印を付ける。
+  // 「つくば市なら他にこういう地名がありますよ、と出ると『ここまだ行ったことないな』となる」から。
+  // 色は塗れない（町丁目の境界は重すぎる）が、印が付くだけでも次の行き先になる。
+  //
+  // 町の一覧は市区町村ごとのファイル（data/towns/コード.json、1つ平均4KB）を要るときだけ取る。
+  // 出典: Geolonia 住所データ（国土交通省「位置参照情報」が元。CC BY 4.0）。tools/build_towns.py
+  // ★記録の町丁目名（国土地理院の逆ジオコーダー）と表記が一字違わず同じ★
+  // 自分の記録47件で確かめて47件とも一致したので、名前そのままで突き合わせる。
+  const townCache = new Map();
+  async function loadTowns(code) {
+    if (!/^[0-9]{5}$/.test(code || '')) return null;
+    if (townCache.has(code)) return townCache.get(code);
+    try {
+      const r = await fetch('./data/towns/' + code + '.json');
+      if (!r.ok) return null;
+      const d = await r.json();
+      townCache.set(code, d);
+      return d;
+    } catch (e) {
+      return null;          // 圏外。失敗は覚えず、次に開いたときにまた取りに行く
+    }
+  }
+
+  const GYO = ['あいうえお', 'かきくけこ', 'さしすせそ', 'たちつてと', 'なにぬねの',
+    'はひふへほ', 'まみむめも', 'やゆよ', 'らりるれろ', 'わをん'];
+  function gyoOf(h) {
+    for (const g of GYO) if (h && g.indexOf(h) >= 0) return g.charAt(0) + '行';
+    return 'その他（読みの分からないもの）';
+  }
+
+  async function renderChomeList(box, all) {
+    const token = (state.chomeToken = (state.chomeToken || 0) + 1);
+    const cities = new Map();
+    let total = 0;
     for (const v of all) {
       if (!(v.address && v.address.lv01Nm)) continue;
-      const key = (v.address.muniCd || '') + '/' + v.address.lv01Nm;
-      const rec = map.get(key) || { name: v.address.lv01Nm, city: v.name || '', dates: [] };
-      rec.dates.push(v.visitedAt || '');
-      map.set(key, rec);
+      const code = v.address.muniCd || '';
+      const key = code || ('?' + (v.name || ''));
+      let c = cities.get(key);
+      if (!c) {
+        c = { key: key, code: code, city: v.name || '', towns: new Map(), data: null };
+        cities.set(key, c);
+      }
+      const nm = v.address.lv01Nm;
+      if (!c.towns.has(nm)) { c.towns.set(nm, []); total++; }
+      c.towns.get(nm).push(v.visitedAt || '');
     }
-    const q = (($('#hist-filter') || {}).value || '').trim();
-    let items = Array.from(map.values());
-    if (q) items = items.filter(function (it) { return (it.name + it.city).includes(q); });
-    items.sort(function (a, b) {
-      return (a.city + a.name).localeCompare(b.city + b.name, 'ja');
-    });
 
-    $('#hist-summary').textContent = map.size
-      ? '町丁目 ' + map.size + '件' + (q ? '（表示 ' + items.length + '件）' : '')
-      : '';
-
-    box.innerHTML = '';
-    if (!items.length) {
+    if (!total) {
+      $('#hist-summary').textContent = '';
       box.innerHTML = '<p class="muted" style="padding:12px">町丁目の記録がありません。「ここを記録」で現在地から記録すると自動で入ります（通信が必要です）。</p>';
       return;
     }
-    let lastCity = null;
-    for (const it of items) {
-      if (it.city !== lastCity) {
-        const h = document.createElement('div');
-        h.className = 'group';
-        const cnt = items.filter(function (x) { return x.city === it.city; }).length;
-        const sp = document.createElement('span');
-        sp.textContent = it.city;
-        const sm = document.createElement('small');
-        sm.textContent = cnt + '件';
-        h.appendChild(sp);
-        h.appendChild(sm);
-        box.appendChild(h);
-        lastCity = it.city;
-      }
-      const row = document.createElement('div');
-      row.className = 'hrow';
-      const n = document.createElement('span');
-      n.className = 'hrow__name';
-      n.textContent = it.name;
-      row.appendChild(n);
-      if (it.dates.length > 1) {
-        const t = document.createElement('small');
-        t.textContent = it.dates.length + '回';
-        row.appendChild(t);
-      }
-      box.appendChild(row);
+    const list = Array.from(cities.values());
+    // 見出しに「行った数 / 全部の数」を出すため、町の一覧を先に取る（取れなければ行った数だけ）
+    const data = await Promise.all(list.map((c) => loadTowns(c.code)));
+    // 待っている間に別の表示に切り替わっていたら、描かない（古い中身で上書きしない）
+    if (token !== state.chomeToken || state.histMode !== 'chome') return;
+    // 市区町村の名前は、アプリのほかの所と同じ（記録に入っている名前）を使う。
+    // 町の一覧の名前は「山武郡芝山町」のように郡が付くので、無いときだけ郡を外して使う。
+    list.forEach((c, i) => {
+      c.data = data[i];
+      if (!c.city && c.data && c.data.n) c.city = c.data.n.replace(/^.+?郡(?=.+[町村]$)/, '');
+    });
+    list.sort((a, b) => a.city.localeCompare(b.city, 'ja'));
+
+    const q = (($('#hist-filter') || {}).value || '').trim();
+    let every = 0;
+    for (const c of list) if (c.data) every += c.data.t.length;
+    $('#hist-summary').textContent = '町丁目 ' + total + '件'
+      + (every ? '（行ったことのある市区町村の町は全部で ' + every.toLocaleString() + '）' : '');
+
+    box.innerHTML = '';
+    const open = state.chomeOpen || (state.chomeOpen = new Set());
+    let shown = 0;
+    for (const c of list) {
+      const hitCity = !q || c.city.includes(q)
+        || Array.from(c.towns.keys()).some((n) => n.includes(q))
+        || (c.data && c.data.t.some((t) => t[0].includes(q)));
+      if (!hitCity) continue;
+      shown++;
+      const h = document.createElement('div');
+      h.className = 'group';
+      const sp = document.createElement('span');
+      sp.textContent = c.city;
+      const sm = document.createElement('small');
+      sm.textContent = c.data
+        ? c.towns.size + ' / ' + c.data.t.length + ' 町（'
+          + Math.round((c.towns.size / c.data.t.length) * 100) + '%）'
+        : c.towns.size + '件';
+      h.appendChild(sp);
+      h.appendChild(sm);
+      box.appendChild(h);
+      const body = document.createElement('div');
+      box.appendChild(body);
+      drawCityTowns(body, c, q, open);
     }
+    if (!shown) box.innerHTML = '<p class="muted" style="padding:12px">該当がありません。</p>';
+  }
+
+  // 1つの市区町村の中身。「行った町」だけか「全部の町」かを、その場で切り替える
+  // （全体を描き直すと、長い一覧の途中で押したときに位置が飛ぶ）。
+  function drawCityTowns(body, c, q, open) {
+    body.innerHTML = '';
+    const isOpen = open.has(c.key) && c.data;
+    if (!isOpen) {
+      const names = Array.from(c.towns.keys())
+        .filter((n) => !q || n.includes(q) || c.city.includes(q))
+        .sort((a, b) => a.localeCompare(b, 'ja'));
+      for (const n of names) {
+        const row = document.createElement('div');
+        row.className = 'hrow';
+        const nm = document.createElement('span');
+        nm.className = 'hrow__name';
+        nm.textContent = n;
+        row.appendChild(nm);
+        const ds = c.towns.get(n);
+        if (ds.length > 1) {
+          const t = document.createElement('small');
+          t.textContent = ds.length + '回';
+          row.appendChild(t);
+        }
+        body.appendChild(row);
+      }
+    } else {
+      body.appendChild(townGrid(c, q));
+    }
+    if (!c.data) return;              // 町の一覧が取れていない（圏外）なら切り替えは出さない
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'chome__more';
+    const rest = c.data.t.length - c.towns.size;
+    more.textContent = isOpen ? '▲ 行った町だけにする'
+      : '▼ ' + c.city + 'の町を全部見る（まだの町 ' + rest + '）';
+    more.addEventListener('click', () => {
+      if (open.has(c.key)) open.delete(c.key); else open.add(c.key);
+      drawCityTowns(body, c, q, open);
+      if (!open.has(c.key)) body.previousSibling.scrollIntoView({ block: 'nearest' });
+    });
+    body.appendChild(more);
+  }
+
+  // 全部の町を、あかさたなの見出しごとに並べる。行った町は色付き
+  function townGrid(c, q) {
+    const wrap = document.createElement('div');
+    wrap.className = 'chome__all';
+    const bar = document.createElement('div');
+    bar.className = 'chome__bar';
+    const fill = document.createElement('i');
+    fill.style.width = Math.round((c.towns.size / c.data.t.length) * 100) + '%';
+    bar.appendChild(fill);
+    wrap.appendChild(bar);
+
+    const tools = document.createElement('div');
+    tools.className = 'chome__tools';
+    const mapBtn = document.createElement('button');
+    mapBtn.type = 'button';
+    mapBtn.className = 'btn btn--sub btn--slim';
+    mapBtn.textContent = '地図に出す';
+    mapBtn.addEventListener('click', () => showTownsOnMap(c));
+    tools.appendChild(mapBtn);
+    const lab = document.createElement('label');
+    const chk = document.createElement('input');
+    chk.type = 'checkbox';
+    chk.checked = !!state.chomeTodo;
+    lab.appendChild(chk);
+    lab.appendChild(document.createTextNode('まだの町だけ'));
+    tools.appendChild(lab);
+    wrap.appendChild(tools);
+
+    const grid = document.createElement('div');
+    wrap.appendChild(grid);
+    const draw = () => {
+      grid.innerHTML = '';
+      let lastGyo = null, chips = null;
+      for (const t of c.data.t) {
+        const dates = c.towns.get(t[0]);
+        if (state.chomeTodo && dates) continue;
+        if (q && !t[0].includes(q) && !c.city.includes(q)) continue;
+        const g = gyoOf(t[1]);
+        if (g !== lastGyo) {
+          const hd = document.createElement('div');
+          hd.className = 'chome__gyo';
+          hd.textContent = g;
+          grid.appendChild(hd);
+          chips = document.createElement('div');
+          chips.className = 'chome__chips';
+          grid.appendChild(chips);
+          lastGyo = g;
+        }
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'tchip' + (dates ? ' is-been' : '') + (t[2] == null ? ' is-nopos' : '');
+        b.textContent = t[0];
+        if (dates && dates.length > 1) {
+          const sm = document.createElement('small');
+          sm.textContent = dates.length + '回';
+          b.appendChild(sm);
+        }
+        if (t[2] == null) {
+          b.title = '位置が分からない町です';
+          b.addEventListener('click', () => toast(t[0] + ' は位置が分からないため、地図に出せません'));
+        } else {
+          b.addEventListener('click', () => showTownOnMap(t, c.city, dates));
+        }
+        chips.appendChild(b);
+      }
+      if (!grid.childNodes.length) {
+        grid.innerHTML = '<p class="muted" style="padding:8px 2px">'
+          + (state.chomeTodo ? 'この市区町村の町は全部行っています。' : '該当がありません。') + '</p>';
+      }
+    };
+    chk.addEventListener('change', () => { state.chomeTodo = chk.checked; draw(); });
+    draw();
+
+    const src = document.createElement('small');
+    src.className = 'chome__src';
+    src.textContent = '町の名前と位置: Geolonia 住所データ（国土交通省「位置参照情報」をもとに作成・CC BY 4.0）。'
+      + '地図の位置は町のおおよその真ん中です。';
+    wrap.appendChild(src);
+    return wrap;
+  }
+
+  function townPopup(t, city, dates) {
+    const box = document.createElement('div');
+    box.className = 'colpop';
+    box.innerHTML = '<b>' + escapeHtml(t[0]) + '</b>'
+      + '<small>' + escapeHtml(city)
+      + (dates ? '　✓ ' + dates.length + '回 記録があります' : '　まだ行っていません') + '</small>'
+      + '<small>町のおおよその真ん中を指しています</small>';
+    box.appendChild(linkChips({ name: t[0], address: city }));
+    box.appendChild(routeButton(t[2], t[3], t[0]));
+    return box;
+  }
+
+  function showTownOnMap(t, city, dates) {
+    switchTab('map');
+    setTimeout(() => {
+      state.map.setView([t[2], t[3]], 15);
+      L.popup(POPUP_OPTS).setLatLng([t[2], t[3]]).setContent(townPopup(t, city, dates)).openOn(state.map);
+    }, 80);
+  }
+
+  // その市区町村の町を全部、印で地図に出す。まだの町を濃く、行った町を薄く
+  function showTownsOnMap(c) {
+    if (state.colLayer) { state.map.removeLayer(state.colLayer); state.colLayer = null; }
+    const g = L.layerGroup();
+    const pts = [];
+    for (const t of c.data.t) {
+      if (t[2] == null) continue;
+      const dates = c.towns.get(t[0]);
+      g.addLayer(colPin({ lat: t[2], lng: t[3] }, {
+        radius: dates ? 5 : 7,
+        color: dates ? '#9aa7b8' : '#c0392b',
+        fillColor: dates ? '#c9d2e0' : '#e8a33d',
+        fillOpacity: dates ? 0.5 : 0.9,
+        weight: 2,
+      }, (dates ? '✓ ' : '') + t[0], () => townPopup(t, c.city, dates)));
+      pts.push([t[2], t[3]]);
+    }
+    if (!pts.length) { toast('地図に出せる町がありません'); return; }
+    state.colLayer = g.addTo(state.map);
+    state.colLayerName = c.city + 'の町';
+    switchTab('map');
+    setTimeout(() => {
+      state.map.invalidateSize();
+      state.map.fitBounds(L.latLngBounds(pts).pad(0.08));
+    }, 120);
+    $('#btn-col-clear').hidden = false;
+    $('#btn-col-clear').textContent = '「' + c.city + 'の町」を消す';
+    toast(c.city + 'の町を ' + pts.length + ' か所出しました（濃い色がまだの町）');
   }
 
   // まとめ。集めたものが数字で見えると続けやすくなる。
@@ -4330,6 +4556,12 @@
     { id: 'castle12',     file: './data/collections/castle12.json' },
     { id: 'kokuho5',      file: './data/collections/kokuho5.json' },
     { id: 'sanmeijo',     file: './data/collections/sanmeijo.json' },
+    { id: 'sanyamajiro',  file: './data/collections/sanyamajiro.json' },
+    { id: 'sansuijo',     file: './data/collections/sansuijo.json' },
+    { id: 'castle_all',   file: './data/collections/castle_all.json' },
+    { id: 'tokubetsu',    file: './data/collections/tokubetsu.json' },
+    { id: 'shiseki',      file: './data/collections/shiseki.json' },
+    { id: 'kofun',        file: './data/collections/kofun.json' },
     { id: 'shikoku88',  file: './data/collections/shikoku88.json' },
     { id: 'saikoku33',  file: './data/collections/saikoku33.json' },
     { id: 'bando33',    file: './data/collections/bando33.json' },
@@ -4354,6 +4586,10 @@
     { id: 'museum',           file: './data/collections/museum.json' },
     { id: 'botanical',        file: './data/collections/botanical.json' },
     { id: 'amusement',        file: './data/collections/amusement.json' },
+    { id: 'science',          file: './data/collections/science.json' },
+    { id: 'norimono',         file: './data/collections/norimono.json' },
+    { id: 'shizen',           file: './data/collections/shizen.json' },
+    { id: 'ski',              file: './data/collections/ski.json' },
     { id: 'tower',            file: './data/collections/tower.json' },
     { id: 'aquarium',         file: './data/collections/aquarium.json' },
     { id: 'artmuseum',        file: './data/collections/artmuseum.json' },
@@ -4940,8 +5176,8 @@
     // 登録の一覧は足した順に伸びていくので、新しいリストを足すたびに
     // 区分が末尾に飛んだり順番が入れ替わったりする（寺の宗派が最後に出た）。
     // 並びはここで決める。ここに無い区分は後ろにまわす。
-    const GROUP_ORDER = ['世界遺産', '城', '巡礼・霊場', '寺の宗派', '神社', '神社の系統',
-      '社格・由緒', '自然', '海と空', '道と駅', '街道', '見どころ', '三大・名所'];
+    const GROUP_ORDER = ['世界遺産', '城', '史跡', '巡礼・霊場', '寺の宗派', '神社', '神社の系統',
+      '社格・由緒', '自然', '海と空', '道と駅', '街道', '見どころ', 'レジャー', '三大・名所'];
     const rank = (n) => { const i = GROUP_ORDER.indexOf(n); return i < 0 ? 999 : i; };
     groups.sort((a, b) => rank(a.name) - rank(b.name));
     // ★35本を全部並べると探せない★ 見出しを押すと畳める。畳んだ見出しは端末に覚える
@@ -5102,7 +5338,13 @@
       jump.addEventListener('click', () => {
         switchTab('map');
         // おおよその位置なら寄りすぎない。近づくほど「ここにある」と見えてしまう
-        setTimeout(() => state.map.setView([r.it.lat, r.it.lng], r.it.approx ? 13 : 16), 80);
+        setTimeout(() => {
+          state.map.setView([r.it.lat, r.it.lng], r.it.approx ? 13 : 16);
+          // ★地図に移ったら、その場所の吹き出しをそのまま開く★
+          // ホームページ・調べる・道のり・記録が、一覧からでも1回で出せるように。
+          L.popup(POPUP_OPTS).setLatLng([r.it.lat, r.it.lng])
+            .setContent(collectPinPopup(r.it, col, !!r.been)).openOn(state.map);
+        }, 80);
       });
       row.appendChild(jump);
 
@@ -5238,6 +5480,29 @@
     return 'colpins';
   }
 
+  // ★指で押せる大きさにする★
+  // 見た目の丸は直径14〜16pxで、指先（おおよそ40px）よりずっと小さい。
+  // 少し外すと下の市区町村の塗りを押したことになり、その市区町村の記録画面が開いていた
+  // （「吹き出しが出ないで、すぐ登録の画面になる」の正体の1つ）。
+  // 見た目はそのままに、透明な大きい丸を上に重ねて、そちらで押されるようにする。
+  const COLPIN_HIT = 20;           // 当たりの半径（px）。直径40px
+  // ★吹き出しを左上のボタンの下に潜らせない★
+  // 地図の左上には「＋−」と「○○を消す」がある。吹き出しがそこまで上がると題名が隠れた。
+  // その分だけ余白を取って、地図の方を動かして吹き出しを見せる。
+  const POPUP_OPTS = { autoPanPaddingTopLeft: L.point(56, 64), autoPanPaddingBottomRight: L.point(12, 12) };
+  function colPin(it, style, tip, popup) {
+    const pane = colPinPane();
+    const dot = L.circleMarker([it.lat, it.lng],
+      Object.assign({ pane: pane, interactive: false }, style));
+    const hit = L.circleMarker([it.lat, it.lng], {
+      pane: pane, radius: COLPIN_HIT, stroke: false,
+      fill: true, fillColor: '#000', fillOpacity: 0,
+    });
+    hit.bindTooltip(tip);
+    hit.bindPopup(popup, POPUP_OPTS);     // 関数を渡すと、開いたときに初めて中身を作る
+    return L.layerGroup([dot, hit]);
+  }
+
   async function renderCollectPins(force) {
     if (state.colPinLayer) {
       state.map.removeLayer(state.colPinLayer);
@@ -5262,17 +5527,14 @@
         if (n >= COLPIN_MAX) { over = true; break; }
         n++;
         const been = visitedItem(it, visits, hand, col.reach);
-        const m = L.circleMarker([it.lat, it.lng], {
-          pane: colPinPane(),
+        g.addLayer(colPin(it, {
           radius: been ? 4 : 7,
           color: been ? '#9aa7b8' : '#c0392b',
           fillColor: been ? '#c9d2e0' : '#e8a33d',
           fillOpacity: been ? 0.45 : 0.9,
           weight: 2,
-        });
-        m.bindTooltip((been ? '✓ ' : '') + it.name + '（' + col.name + '）');
-        m.bindPopup(collectPinPopup(it, col, been));
-        g.addLayer(m);
+        }, (been ? '✓ ' : '') + it.name + '（' + col.name + '）',
+        () => collectPinPopup(it, col, been)));
       }
       if (over) break;
     }
@@ -5291,13 +5553,9 @@
     if (state.colLayer) { state.map.removeLayer(state.colLayer); state.colLayer = null; }
     const g = L.layerGroup();
     for (const h of hits.slice(0, 400)) {
-      const m = L.circleMarker([h.it.lat, h.it.lng], {
-        pane: colPinPane(),
+      g.addLayer(colPin(h.it, {
         radius: 7, color: '#c0392b', fillColor: '#e8a33d', fillOpacity: 0.9, weight: 2,
-      });
-      m.bindTooltip(h.it.name + '（' + h.col.name + '）');
-      m.bindPopup(collectPinPopup(h.it, h.col, false));
-      g.addLayer(m);
+      }, h.it.name + '（' + h.col.name + '）', () => collectPinPopup(h.it, h.col, false)));
     }
     state.colLayer = g.addTo(state.map);
     state.colLayerName = '近くのまだの場所';
@@ -5315,6 +5573,41 @@
     toast(Math.min(hits.length, 400) + ' か所を地図に出しました');
   }
 
+  // ★その場所のことを調べられるようにする★
+  // 「勅願寺はホームページから拾ってきたなら、そのページに飛べるといい」という声から。
+  // 記事（wiki）とホームページ（web）は、リストを作るときに裏が取れたものだけ入っている
+  // （tools/add_links.py。記事の座標がリストの座標と近いものだけ）。無い場所も「調べる」で検索できる。
+  function wikiUrl(it) {
+    const t = it.wiki === 1 ? it.name : String(it.wiki);
+    return 'https://ja.wikipedia.org/wiki/' + encodeURIComponent(t.replace(/ /g, '_'));
+  }
+  function searchUrl(it) {
+    const pref = /[都道府県]$/.test(it.kuni || '') ? it.kuni : '';
+    const q = [it.name, it.address || pref].filter(Boolean).join(' ');
+    return 'https://www.google.com/search?q=' + encodeURIComponent(q);
+  }
+  function linkChips(it) {
+    const box = document.createElement('div');
+    box.className = 'linkchips';
+    const add = (href, label, title) => {
+      const a = document.createElement('a');
+      a.href = href;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.textContent = label;
+      a.title = title;
+      box.appendChild(a);
+    };
+    // ★http(s) のものしか開かない★ もらったリストに「javascript:」が入っていたら、
+    // 押しただけでこのアプリの中で動いてしまう（記録を抜き取られる）。
+    if (it.web && /^https?:\/\//i.test(String(it.web))) {
+      add(it.web, '🏠 ホームページ', 'この場所のホームページを開きます');
+    }
+    if (it.wiki) add(wikiUrl(it), '📖 ウィキペディア', 'ウィキペディアの記事を開きます');
+    add(searchUrl(it), '🔍 調べる', 'Googleで検索します');
+    return box;
+  }
+
   function collectPinPopup(it, col, been) {
     const wrap = document.createElement('div');
     wrap.className = 'colpop';
@@ -5322,6 +5615,7 @@
       + '<small>' + escapeHtml((col.mark || '') + ' ' + col.name)
       + (been ? '　✓ 記録があります' : '　まだです') + '</small>'
       + (it.note ? '<small>' + escapeHtml(it.note) + '</small>' : '');
+    wrap.appendChild(linkChips(it));
     if (!been) {
       const rec = document.createElement('button');
       rec.type = 'button';
@@ -5378,22 +5672,20 @@
     state.colLayerName = col.name;
     if (state.colLayer) { state.map.removeLayer(state.colLayer); state.colLayer = null; }
     const g = L.layerGroup();
+    // ★押したら吹き出しを出す★（v85までは、押すといきなり登録の画面になっていた）
+    // 地図を見ながら指で探っているだけでも登録が始まってしまい、
+    // 「吹き出しが出ないで即登録みたいになる」と言われた。ほかの印と同じ吹き出しにそろえ、
+    // 記録するかどうかは吹き出しの中のボタンで決めてもらう。
     for (const it of items) {
-      const been = visitedItem(it, visits, hand);
-      const m = L.circleMarker([it.lat, it.lng], {
-        pane: colPinPane(),
+      const been = visitedItem(it, visits, hand, col.reach);
+      g.addLayer(colPin(it, {
         radius: been ? 5 : 8,
         color: been ? '#9aa7b8' : '#c0392b',
         fillColor: been ? '#c9d2e0' : '#e8a33d',
         fillOpacity: been ? 0.5 : 0.95,
         weight: 2,
-      });
-      m.bindTooltip((been ? '✓ ' : '') + (it.no ? it.no + '. ' : '') + it.name);
-      m.on('click', () => {
-        if (been) { toast(it.name + '：記録があります'); return; }
-        recordLandmark(it.name, { tag: col.tag || '' }, it.lat, it.lng);
-      });
-      g.addLayer(m);
+      }, (been ? '✓ ' : '') + (it.no ? it.no + '. ' : '') + it.name,
+      () => collectPinPopup(it, col, been)));
     }
     state.colLayer = g.addTo(state.map);
     switchTab('map');
@@ -5986,15 +6278,56 @@
     const visits = await Store.getAllVisits();
     const photos = await Store.photosOf(visits);
     if (!photos.length) return null;
+    const dirOf = photoFolders(visits);
     const files = photos.map((p) => ({
       // ★名前の後ろに必ず id を付ける★
       // 戻すときは id で記録と結び直すので、id を落とすと写真が迷子になる。
       // 「名前__id.jpg」の形にして、人が見て分かる名前を前に出す。
-      name: photoFileNameOf(p),
+      // ★フォルダは見やすくするためだけのもの★ 読み戻すときは見ない（名前と id だけで戻る）。
+      name: (dirOf.get(p.id) ? dirOf.get(p.id) + '/' : '') + photoFileNameOf(p),
       blob: p.blob,
     }));
     const blob = await Zip.write(files, onProgress);
     return { blob: blob, name: `meguri-photos-${todayLocal()}.zip`, count: photos.length };
+  }
+
+  // ★場所ごとのフォルダに分ける★
+  // 1つのフォルダに何百枚も並ぶと、パソコンで開いたときにどこの写真か分からない。
+  // 地図のピンと同じまとめ方（groupByPlace）で場所を決め、その場所のフォルダに入れる。
+  // フォルダ名は「市区町村 場所の名前」。市区町村を前に置くのは、
+  // 同じ名前（トイレ・コンビニ）でも見分けられるのと、並べると近い場所が隣り合うため。
+  // それでも同じ名前になったら「(2)」を付ける（別の場所を1つのフォルダに混ぜない）。
+  function photoFolders(visits) {
+    const out = new Map();                 // 写真id → フォルダ名
+    const withPh = visits.filter((v) => (v.photoIds || []).length);
+    const hasGeo = (v) => v.coords && typeof v.coords.lat === 'number';
+    const geo = withPh.filter(hasGeo);
+    const groups = geo.length ? groupByPlace(geo) : [];
+    // 座標の無い記録（県・市区町村だけの記録）は、その名前でまとめる
+    const byName = new Map();
+    for (const v of withPh) {
+      if (hasGeo(v)) continue;
+      const k = v.name || '';
+      if (!byName.has(k)) byName.set(k, { name: '', items: [] });
+      byName.get(k).items.push(v);
+    }
+    const used = new Set();
+    for (const g of groups.concat(Array.from(byName.values()))) {
+      const v0 = g.items[0];
+      const city = v0.name || '';
+      let label;
+      if (g.name) label = (city && city !== g.name ? city + ' ' : '') + g.name;
+      else if (v0.address && v0.address.lv01Nm) label = city + ' ' + v0.address.lv01Nm;
+      else label = city + ' ' + ((v0.visitedAt || '').slice(0, 10) || '日付なし');
+      const base = safeName(label).replace(/[. ]+$/, '') || '場所の名前なし';
+      let name = base;
+      for (let n = 2; used.has(name); n++) name = base + ' (' + n + ')';
+      used.add(name);
+      for (const v of g.items) {
+        for (const id of (v.photoIds || [])) if (!out.has(id)) out.set(id, name);
+      }
+    }
+    return out;
   }
 
   // ファイル名に使えない文字を落とす。長すぎる名前も切る
@@ -6033,23 +6366,48 @@
 
   // 写真のZIPを読み込む。★記録が無くても入れる★
   // 順番はどちらからでもよい（写真→記録の順に読んでも結びつく）。
-  async function importPhotoZip(file) {
+  async function importPhotoZip(file, onProgress) {
     const list = await Zip.read(file);
     const put = [];
     for (const e of list) {
-      const base = e.name.replace(/\.[^.]+$/, '');
+      // ★場所ごとのフォルダ（v86〜）は読み飛ばす★
+      // 「つくば市 筑波山神社/名前__id.jpg」の、最後の / より後ろだけを見る。
+      // パソコンで作り直したZIPに入る「フォルダそのもの」や隠しファイルも捨てる。
+      if (/\/$/.test(e.name) || !e.blob.size) continue;
+      if (/(^|\/)__MACOSX\//.test(e.name)) continue;
+      const file = e.name.slice(e.name.lastIndexOf('/') + 1);
+      if (!file || file.charAt(0) === '.') continue;
+      const base = file.replace(/\.[^.]+$/, '');
       if (!base) continue;
       // 「名前__id」の形。__ が無ければ全体が id（v82以前に書き出したZIP）
       const k = base.lastIndexOf('__');
       const id = k >= 0 ? base.slice(k + 2) : base;
       const nm = k >= 0 ? base.slice(0, k) : '';
       if (!id) continue;
-      const rec = { id: id, blob: e.blob, size: e.blob.size, type: typeOf(e.name) };
+      const rec = { id: id, blob: e.blob, size: e.blob.size, type: typeOf(file) };
       if (nm) rec.name = nm;
       put.push(rec);
     }
     if (!put.length) throw new Error('写真が入っていませんでした');
-    return await Store.putPhotosRaw(put);
+    return await Store.putPhotosRaw(put, onProgress);
+  }
+
+  // ★時間のかかる処理は、動いていることを見せる★
+  // 写真の読み込みは数百枚で数十秒かかる。何も出ないと「読み込んでいないのかな」と思って
+  // 画面を閉じてしまい、途中までしか入らない。何枚目かを出し、閉じないように頼む。
+  function showBusy(text, done, total) {
+    const el = $('#busy');
+    if (!el) return;
+    el.hidden = false;
+    $('#busy-text').textContent = text;
+    const has = typeof total === 'number' && total > 0;
+    $('#busy-count').textContent = has ? done + ' / ' + total : '';
+    $('#busy-barbox').hidden = !has;
+    if (has) $('#busy-bar').style.width = Math.round((done / total) * 100) + '%';
+  }
+  function hideBusy() {
+    const el = $('#busy');
+    if (el) el.hidden = true;
   }
 
   // ---------------------------------------------------------------
@@ -6310,15 +6668,19 @@
       pb.disabled = true;
       pb.textContent = 'まとめています…';
       try {
+        showBusy('写真をまとめています');
         const z = await buildPhotoZip((done, all) => {
           pb.textContent = 'まとめています… ' + done + '/' + all;
+          showBusy('写真をまとめています', done, all);
         });
+        hideBusy();
         if (!z) { toast('写真がありません'); return; }
         saveFile(new File([z.blob], z.name, { type: 'application/zip' }));
         toast(z.count + ' 枚を書き出しました');
       } catch (e) {
         toast('書き出せませんでした: ' + e.message);
       } finally {
+        hideBusy();
         pb.disabled = false;
         pb.textContent = label;
       }
@@ -6338,11 +6700,17 @@
             + '　写真 ' + list.length + ' 枚（' + (f0.size / 1048576).toFixed(1) + 'MB）\n\n'
             + '今ある写真は消えません。同じ写真は上書きされます。\n\n読み込みますか？');
           if (!ok) { e.target.value = ''; return; }
-          const n = await importPhotoZip(f0);
+          showBusy('写真を読み込んでいます', 0, list.length);
+          const n = await importPhotoZip(f0, (done, all) => {
+            showBusy('写真を読み込んでいます', done, all);
+          });
+          showBusy('仕上げています');
           await renderPhotoSize();
           await renderHistory(true);
+          hideBusy();
           alert('写真を ' + n + ' 枚読み込みました。');
         } catch (err) {
+          hideBusy();
           alert('読み込めませんでした: ' + err.message);
         }
         e.target.value = '';
@@ -6389,9 +6757,16 @@
         );
         if (!ok) { e.target.value = ''; return; }
 
-        const r = await Store.importAll(data, { merge: true });
-        await refreshVisited();
-        refreshMap(); renderList(); renderProgress(); renderBackupStatus();
+        showBusy('記録を読み込んでいます');
+        let r;
+        try {
+          r = await Store.importAll(data, { merge: true });
+          showBusy('地図を描き直しています');
+          await refreshVisited();
+          refreshMap(); renderList(); renderProgress(); renderBackupStatus();
+        } finally {
+          hideBusy();
+        }
         // ★toastは数秒で消える★ 読み込みは大事な操作なので、押して閉じる形で残す
         alert('読み込みました。\n\n'
           + '　記録 ' + r.visits + ' 件\n'

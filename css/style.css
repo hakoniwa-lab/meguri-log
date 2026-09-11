@@ -1044,3 +1044,52 @@ a{color:var(--navy)}
 .lead-form{display:flex;gap:8px;margin-top:12px}
 .lead-form__input{flex:1;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink);font:inherit;font-size:14px}
 @media (max-width:480px){.lead-form{flex-direction:column}}
+
+/* 時間のかかる処理の間だけ出す幕。★[hidden] を必ず書く★（display:flex が勝つため） */
+.busy{position:fixed; inset:0; z-index:3000; background:rgba(20,30,45,.55);
+  display:flex; align-items:center; justify-content:center}
+.busy[hidden]{display:none}
+.busy__box{background:#fff; border-radius:14px; padding:20px 22px; width:min(84vw,320px);
+  text-align:center; box-shadow:0 8px 30px rgba(0,0,0,.25)}
+.busy__spin{width:34px; height:34px; margin:0 auto 10px; border:4px solid #dfe5ee;
+  border-top-color:var(--navy); border-radius:50%; animation:busyspin .9s linear infinite}
+@keyframes busyspin{to{transform:rotate(360deg)}}
+.busy__box p{margin:0 0 4px; font-weight:700}
+.busy__count{display:block; font-size:20px; margin-bottom:8px; color:var(--navy)}
+.busy__count:empty{display:none}
+.busy__bar{height:8px; background:#e8edf3; border-radius:4px; overflow:hidden}
+.busy__bar[hidden]{display:none}
+.busy__bar i{display:block; height:100%; width:0; background:var(--amber); transition:width .2s}
+.busy__box small{display:block; margin-top:10px; color:var(--muted); font-size:11.5px; line-height:1.6}
+
+/* 吹き出しの「ホームページ・ウィキペディア・調べる」 */
+.linkchips{display:flex; flex-wrap:wrap; gap:6px; margin:8px 0 2px}
+.linkchips a{font-size:12px; padding:5px 9px; border-radius:14px; background:#eef2f7;
+  color:var(--navy); text-decoration:none; font-weight:600; white-space:nowrap}
+.linkchips a:active{background:#dde5ef}
+
+/* 町丁目: その市区町村の町を全部並べる */
+.chome__more{display:block; width:100%; margin:2px 0 14px; padding:9px; border:1.5px dashed var(--navy);
+  border-radius:10px; background:#fff; color:var(--navy); font-weight:700; font-size:13px}
+.chome__more:active{background:var(--bg)}
+.chome__bar{height:6px; background:#e8edf3; border-radius:3px; overflow:hidden; margin:2px 0 8px}
+.chome__bar i{display:block; height:100%; background:var(--amber)}
+.chome__tools{display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:0 0 4px}
+.chome__tools .btn{margin:0}
+.chome__tools label{font-size:12.5px; display:inline-flex; gap:5px; align-items:center}
+.chome__gyo{font-size:11.5px; font-weight:700; color:var(--muted); margin:10px 2px 5px}
+.chome__chips{display:flex; flex-wrap:wrap; gap:5px}
+.tchip{font-size:12.5px; padding:5px 9px; border-radius:14px; border:1.5px solid #cfd8e3;
+  background:#fff; color:var(--ink); line-height:1.3; font-family:inherit}
+.tchip:active{background:var(--bg)}
+.tchip.is-been{background:var(--amber); border-color:var(--amber); color:#fff; font-weight:700}
+.tchip.is-been::before{content:'✓ '}
+.tchip small{margin-left:4px; font-size:10.5px; opacity:.85}
+.tchip.is-nopos{opacity:.55; border-style:dashed}
+.chome__src{display:block; margin:10px 2px 8px; color:var(--muted); font-size:11px; line-height:1.6}
+
+/* 吹き出しを開いている間は右下の丸いボタンを引っ込める（吹き出しのボタンに重なるため） */
+.fabs{transition:opacity .15s}
+.is-popup .fabs{opacity:0; pointer-events:none}
+/* 押した印に四角い枠が残る（ブラウザが透明な当たりの丸に枠を付ける）のを消す */
+.leaflet-colpins-pane path:focus{outline:none}

@@ -227,12 +227,13 @@ const Store = (() => {
 
     // ZIPから戻した写真を書き戻す。★元のidのまま入れる★
     // 記録が photoIds で id を指しているので、id が変わると結びつきが切れる。
-    async putPhotosRaw(list) {
+    async putPhotosRaw(list, onProgress) {
       let n = 0;
       for (const it of list) {
         const t = tx(['photos'], 'readwrite');
         await reqToPromise(t.objectStore('photos').put(it));
         n++;
+        if (onProgress && (n % 5 === 0 || n === list.length)) onProgress(n, list.length);
       }
       return n;
     },

@@ -5,7 +5,7 @@
    index.html / css / js / data を変更したら、必ず VERSION を上げること。
    上げないと、既に開いたことのある端末は古いキャッシュを返し続け、
    修正がいつまでも届かない（Service Workerは sw.js 自体が変わったときだけ再インストールされる）。 */
-const VERSION = 'v85';
+const VERSION = 'v86';
 const SHELL = 'meguri-shell-' + VERSION;
 const TILES = 'meguri-tiles-' + VERSION;
 const TILE_LIMIT = 400;
@@ -26,8 +26,9 @@ const SHELL_FILES = [
   './manifest.webmanifest',
 ];
 
-// 集めるリスト。全部で30KBほどなので最初から入れておく
-// （圏外の山の中でも「あと何か所か」が見られるように）。
+// 集めるリスト。最初から入れておく（圏外の山の中でも「あと何か所か」が見られるように）。
+// ★もう30KBではない★ v86で91本・3.8MB（送るときはgzipで1MB弱）。
+// 町丁目の一覧（data/towns、7.8MB）は★ここに入れない★ 開いた市区町村のぶんだけ、下のキャッシュ優先で残る。
 const COLLECTION_FILES = [
   'whs', 'castle100', 'castle100b', 'shikoku88',
   'saikoku33', 'bando33', 'chichibu34', 'meisui100', 'taki100',
@@ -42,6 +43,8 @@ const COLLECTION_FILES = [
   'aquarium', 'artmuseum', 'tokaido', 'nakasendo', 'nikkokaido', 'koshukaido',
   'temple_shingon', 'temple_soto', 'temple_nichiren', 'temple_jodo', 'temple_shinshu', 'temple_rinzai', 'temple_tendai', 'temple_obaku', 'temple_jishu', 'temple_yuzu',
   'dam', 'onsen', 'airport',
+  'tokubetsu', 'shiseki', 'kofun', 'castle_all', 'sanyamajiro', 'sansuijo',
+  'science', 'norimono', 'shizen', 'ski',
   'shrine_hachiman', 'shrine_inari', 'shrine_tenman', 'shrine_kumano', 'shrine_suwa', 'shrine_sengen', 'shrine_hie', 'shrine_kasuga', 'shrine_atago', 'shrine_hakusan', 'shrine_sumiyoshi', 'shrine_konpira',
 ].filter(Boolean).map((id) => './data/collections/' + id + '.json');
 // ★filter(Boolean) は保険★

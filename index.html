@@ -310,6 +310,29 @@
           （下の質問を見てください）。Chrome を入れると Chrome 側で改めて聞かれるので、それで動くことも確かめられます。</p>
       </details>
       <details class="qa">
+        <summary>リストの場所のホームページや詳しいことを見たい</summary>
+        <p>地図の印を押すと出る吹き出しに、<b>🏠 ホームページ</b>・<b>📖 ウィキペディア</b>・
+          <b>🔍 調べる</b> が並びます。集めるリストの一覧で名前を押したときも、地図に移ってこの吹き出しが開きます。</p>
+        <p class="muted">ホームページと記事は、リストを作るときに<b>裏が取れたものだけ</b>入れています
+          （記事に書いてある位置が、リストの位置と近いものだけ）。同じ名前のお寺や神社が多いので、
+          名前だけで結ぶと別の場所の記事になってしまうためです。無い場所も「調べる」で検索できます。</p>
+      </details>
+      <details class="qa">
+        <summary>写真のバックアップはどう分かれていますか</summary>
+        <p>写真のZIPの中は、<b>場所ごとのフォルダ</b>に分かれています（「つくば市 筑波山神社」のように、
+          市区町村と場所の名前）。同じ名前の場所は市区町村で見分けられ、それでも同じなら「(2)」が付きます。</p>
+        <p class="muted">フォルダは見やすくするためだけのものです。読み込むときは写真の名前の後ろにある番号で
+          記録と結び直すので、フォルダの名前を変えても大丈夫です（写真のファイル名の「__」から後ろは消さないでください）。</p>
+      </details>
+      <details class="qa">
+        <summary>町丁目の一覧に、行っていない町も出したい</summary>
+        <p>記録タブの「町丁目」で、市区町村ごとの <b>「▼ ○○市の町を全部見る」</b> を押すと、
+          その市区町村の町を全部並べます。行った町は色が付き、押すとその町を地図で見られます。
+          「地図に出す」で、まだの町を印でまとめて出すこともできます。</p>
+        <p class="muted">町の名前と位置は Geolonia 住所データ（国土交通省「位置参照情報」をもとに作成）です。
+          市区町村ごとに、開いたときだけ読み込みます（1つ数KB）。</p>
+      </details>
+      <details class="qa">
         <summary>SA・PAに上りと下りが無いものがある</summary>
         <p><b>片方向にしかない</b>か、<b>上下線で同じ施設を使う</b>かのどちらかです。
           どちらなのかは、その場所のメモに書いてあります
@@ -611,6 +634,7 @@
         <li>ご当地のリスト（もらった資料からの作成）</li>
         <li>知多四国霊場など、資料に座標が無くてまだ入れられていない霊場</li>
         <li>1年のふりかえりを画像にして、そのまま人に見せられるようにする</li>
+        <li>プール・レジャープール（出典のデータが荒く、ちゃんとした一覧にならなかったため見送り中）</li>
       </ul>
     </div>
   
@@ -848,9 +872,20 @@
 </div>
 
 <div id="toast" class="toast"></div>
+<!-- 時間のかかる処理（写真の読み込み・書き出し）の間だけ出す -->
+<div id="busy" class="busy" hidden role="status" aria-live="polite">
+  <div class="busy__box">
+    <div class="busy__spin" aria-hidden="true"></div>
+    <p id="busy-text">読み込んでいます</p>
+    <b id="busy-count" class="busy__count"></b>
+    <div id="busy-barbox" class="busy__bar"><i id="busy-bar"></i></div>
+    <small>終わるまで、アプリを閉じたり画面を切り替えたりしないでください</small>
+  </div>
+</div>
 
 <footer class="foot">
   <p>地図データ・ランドマーク &copy; <a href="https://www.openstreetmap.org/copyright" rel="noopener">OpenStreetMap</a> contributors</p>
+  <p>町の名前と位置: <a href="https://github.com/geolonia/japanese-addresses" rel="noopener">Geolonia 住所データ</a>（国土交通省「位置参照情報」をもとに作成・<a href="https://creativecommons.org/licenses/by/4.0/deed.ja" rel="noopener">CC BY 4.0</a>）</p>
   <p><a href="https://hakoniwalab.com/">HAKONIWA LAB</a> ・ <a href="https://hakoniwalab.com/about.html">運営者情報</a> ・ <a href="https://hakoniwalab.com/contact.html">お問い合わせ</a> ・ <a href="https://hakoniwalab.com/privacy.html">プライバシーポリシー</a></p>
 </footer>
 
