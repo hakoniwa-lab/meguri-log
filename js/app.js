@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v91';
+  const APP_VERSION = 'v92';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -254,6 +254,17 @@
     renderList();
     renderProgress();
     initServiceWorker();
+    // 地図が出てから、保存済みの記録の住所を一度だけ見直す（v92〜）
+    // 裏で開いたときは聞かずに待ち、画面に出てきたら聞く。
+    const runReview = () => {
+      if (state.addrReviewing) return;
+      state.addrReviewing = true;
+      reviewSavedAddresses(false).catch(() => {}).then(() => { state.addrReviewing = false; });
+    };
+    setTimeout(runReview, 1500);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') runReview();
+    });
   }
 
   // 訪問済みの集合を作り直す。
@@ -1732,20 +1743,28 @@
   }
 
   // 2MBあるので起動時には読まない。市区町村に切り替えたときだけ取りに行く。
-  async function ensureLevelData(level) {
-    if (state.geo[level]) return true;
-    if (level === 'city' && state.loadingCity) return false;
+  // ★読み込み中にもう一度呼ばれたら、同じ読み込みを待つ★（v92〜）
+  // 以前は false を返していたので、読み込みの途中で「ここを記録」を押すと
+  // 市区町村が分からない扱いになり、都道府県だけの記録になっていた（栃木県・茨城県の2件）。
+  const levelLoading = {};
+  function ensureLevelData(level) {
+    if (state.geo[level]) return Promise.resolve(true);
+    if (levelLoading[level]) return levelLoading[level];
     if (level === 'city') state.loadingCity = true;
     toast('市区町村の地図を読み込んでいます…');
-    try {
-      state.geo[level] = sortByCode(await fetch(LEVELS[level].file).then((r) => r.json()));
-      return true;
-    } catch (e) {
-      toast('地図データを読み込めませんでした');
-      return false;
-    } finally {
-      state.loadingCity = false;
-    }
+    levelLoading[level] = (async () => {
+      try {
+        state.geo[level] = sortByCode(await fetch(LEVELS[level].file).then((r) => r.json()));
+        return true;
+      } catch (e) {
+        toast('地図データを読み込めませんでした');
+        return false;
+      } finally {
+        if (level === 'city') state.loadingCity = false;
+        delete levelLoading[level];
+      }
+    })();
+    return levelLoading[level];
   }
 
   function initLevelSwitch() {
@@ -1924,6 +1943,235 @@
   }
 
   // ---------------------------------------------------------------
+  // 住所の判定を補う（v92〜）
+  // ---------------------------------------------------------------
+  // 「登録された住所の名前が、実際の住所と違うところが何か所かある。GPSのずれか、判定の具合か」。
+  // 自分の記録277件で調べたら、GPSではなく判定の側だった（SPEC §58）。
+  //
+  // ★市区町村は、アプリの境界線より国土地理院の答えを信じる★
+  // municipalities.geojson は角を約1kmおきに結んだ粗い線で、境界から100m以内の記録が
+  // 隣に付いていた（成田空港の南側が芝山町に、刈谷PAが豊田市に、など8件）。
+  // 地理院の muniCd は8件とも正しく、277件で国勢調査の境界と市区町村が食い違ったものも無かった。
+  function geoCityCode(level, code, addr) {
+    code = String(code);
+    if (level !== 'city' || !addr || !/^[0-9]{5}$/.test(addr.muniCd || '')) return code;
+    return (addr.muniCd !== code && featureByCode('city', addr.muniCd)) ? addr.muniCd : code;
+  }
+
+  // ★町名は、住所欄に入れた住所の方を信じる★
+  // 地理院の逆ジオコーダーは町の境界線どおりには答えない。
+  // 地理院の住所検索で「一宮市妙興寺一丁目5番9号」を引いた地点を、同じ地理院で住所に戻すと
+  // 「妙興寺二丁目」と返ってくる。記録の位置は一丁目の中（GPSは合っていた）。
+  // 住所欄に町名が書いてあれば、そちらを記録の町丁目にする。
+  //
+  // ★その町が記録の位置から3km以上離れていたら使わない★
+  // 「ネクスト成田」は住所欄が町の中心部（7.8km先）で、行った倉庫の住所ではなかった。
+  const TOWN_NEAR_M = 3000;
+
+  function kanjiToNum(s) {
+    if (/^[0-9]+$/.test(s)) return parseInt(s, 10);
+    const D = '〇一二三四五六七八九';
+    let n = 0, cur = 0;
+    for (const ch of s) {
+      const d = D.indexOf(ch);
+      if (d >= 0) cur = d;
+      else if (ch === '十') { n += (cur || 1) * 10; cur = 0; }
+      else return NaN;
+    }
+    return n + cur;
+  }
+
+  function normAddr(s) {
+    return String(s || '')
+      .replace(/[０-９Ａ-Ｚａ-ｚ]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+      .replace(/[\s　]+/g, '')
+      .replace(/ヶ/g, 'ケ').replace(/ヵ/g, 'カ')
+      .replace(/([0-9])[ー－−―‐‑–—](?=[0-9])/g, '$1-');
+  }
+
+  // 住所の先頭に町名 name が書かれていれば、一致の強さ（長さ）を返す。書かれていなければ0
+  // 「妙興寺1-5-9」「東領家４丁目３−５」「妙興寺一丁目」のどれでも一丁目・四丁目と読む。
+  function townTextHit(s, name) {
+    const plain = name.replace(/^大?字/, '');
+    const m = plain.match(/^(.+?)([〇一二三四五六七八九十]+)丁目$/);
+    const head = m ? m[1] : plain;
+    const t = s.replace(/^大?字/, '');
+    if (!head || t.indexOf(head) !== 0) return 0;
+    if (!m) return plain.length;
+    const rest = t.slice(head.length);
+    const r = rest.match(/^([0-9]+)(?:丁目|-|番)/) || rest.match(/^([〇一二三四五六七八九十]+)丁目/);
+    return (r && kanjiToNum(r[1]) === kanjiToNum(m[2])) ? plain.length + 1 : 0;
+  }
+
+  // 住所欄の文字から町丁目の名前を出す。
+  // 返り値: 名前／null（書かれていない・遠すぎる）／undefined（町の一覧が取れず分からない）
+  async function townFromText(code, text, coords) {
+    let s = normAddr(text);
+    if (!s || !/^[0-9]{5}$/.test(code || '')) return null;
+    const d = await Promise.race([loadTowns(code), new Promise((ok) => setTimeout(ok, 4000))]);
+    if (!d || !d.t) return undefined;
+    s = s.replace(/^〒?[0-9]{3}-?[0-9]{4}/, '');
+    // ★市区町村名のあとだけを見る★ 見つからなければ都道府県名だけ外す。
+    // 住所のどこにあっても探すと、別の市の住所（移転前の住所など）の一部を町名と取り違える。
+    const full = normAddr(d.n);
+    const short = full.replace(/^.+?郡/, '');
+    const i1 = s.indexOf(full), i2 = s.indexOf(short);
+    if (i1 >= 0) s = s.slice(i1 + full.length);
+    else if (i2 >= 0) s = s.slice(i2 + short.length);
+    else s = s.replace(/^(東京都|北海道|京都府|大阪府|.{2,3}県)/, '');
+    let best = null;
+    for (const t of d.t) {
+      const len = townTextHit(s, normAddr(t[0]));
+      if (len && (!best || len > best.len)) best = { name: t[0], len: len, lat: t[2], lng: t[3] };
+    }
+    if (!best) return null;
+    if (coords && typeof coords.lat === 'number' && typeof best.lat === 'number'
+        && distMeters(coords.lat, coords.lng, best.lat, best.lng) > TOWN_NEAR_M) return null;
+    return best.name;
+  }
+
+  // 記録に入れる市区町村と町丁目を決める。
+  // address.geoNm は地理院が返した町名（住所欄で置き換えたときだけ残す。住所欄を消したら戻せるように）
+  async function settleAddress(level, code, coords, addr, placeText) {
+    code = geoCityCode(level, code, addr);
+    if (level !== 'city') return { code: code, address: addr || null };
+    const geoName = addr ? (addr.geoNm || addr.lv01Nm || '') : '';
+    const t = await townFromText(code, placeText, coords);
+    if (t === undefined) return { code: code, address: addr || null, unsure: true };
+    let a = null;
+    if (t && t !== geoName) a = { muniCd: code, lv01Nm: t, geoNm: geoName };
+    else if (addr && geoName) a = { muniCd: addr.muniCd || code, lv01Nm: geoName };
+    return { code: code, address: a };
+  }
+
+  function sheetSubText(level, feat) {
+    return LEVELS[level].label +
+      (feat.properties.pref ? ' / ' + feat.properties.pref : '') +
+      (level === 'city' && feat.properties.pref ? '（都道府県もあわせて記録されます）' : '');
+  }
+
+  // 開いている記録シートの市区町村を付け替える。前の名前を返す（変わらなければ空文字）
+  function switchSheetCity(code) {
+    const sel = state.selected;
+    const feat = sel && featureByCode(sel.level, code);
+    if (!feat || String(code) === sel.code) return '';
+    const was = sel.name;
+    sel.code = String(code);
+    sel.name = feat.properties.name;
+    $('#sheet-title').textContent = sel.name;
+    $('#sheet-sub').textContent = sheetSubText(sel.level, feat);
+    // 編集中は、保存したときに新しい市区町村の下で描き直す（今は元の場所にしか無い）
+    if (!state.editing) renderVisitList(spotIdOf(sel.level, sel.code), state.sheetOnly);
+    return was;
+  }
+
+  function applyGeoCity() {
+    const sel = state.selected;
+    return sel ? switchSheetCity(geoCityCode(sel.level, sel.code, sel.address)) : '';
+  }
+
+  // ★保存済みの記録も見直す★（v92〜）
+  // 記録するときの判定を直しても、これまでの記録は古い判定のまま残る。
+  // 起動したときに一度だけ見直し、直すものがあれば中身を見せてから直す（黙って書き換えない）。
+  // 直すのは「どの市区町村に付くか」と「町丁目」だけで、メモ・写真・日時には触らない。
+  // 位置のある都道府県だけの記録（市区町村の地図の読み込み中に記録したもの）も、市区町村の記録にする。
+  const ADDR_REVIEW_KEY = 'addrReview-v92';
+  const addrKey = (a) => (a ? [a.muniCd || '', a.lv01Nm || '', a.geoNm || ''].join('|') : '');
+
+  async function reviewSavedAddresses(manual) {
+    if (!manual && document.visibilityState !== 'visible') return;
+    if (!manual && await Store.getMeta(ADDR_REVIEW_KEY)) return;
+    const all = await Store.getAllVisits();
+    const hasPos = (v) => v.coords && typeof v.coords.lat === 'number';
+    if (all.some((v) => v.category === 'city' || v.category === 'pref')
+        && !(await ensureLevelData('city'))) return;               // 次に開いたときにもう一度
+    if (manual) showBusy('記録の住所を見直しています');
+    const fixes = [];
+    let unsure = false;
+    try {
+      for (const v of all) {
+        if (v.category !== 'city' && v.category !== 'pref') continue;
+        // ★記録したときに住所が取れていないものは、今取り直す★
+        // 圏外で住所なしのまま保存された「刈谷PA（上り）」は、位置は刈谷市なのに豊田市に付いていて、
+        // 手元の材料だけでは見直せなかった。
+        let addr = v.address;
+        if (hasPos(v) && !(addr && addr.lv01Nm)) {
+          addr = await reverseGeocode(v.coords.lat, v.coords.lng);
+          if (!addr) unsure = true;
+        }
+        let code = String(v.spotId || '').replace(/^[a-z]+-/, '');
+        let fromPref = false;
+        if (v.category === 'pref') {
+          const f = (hasPos(v) && addr && /^[0-9]{5}$/.test(addr.muniCd || ''))
+            ? featureByCode('city', addr.muniCd) : null;
+          // 県が同じときだけ（位置と県が食い違う記録は、手で付けたものかもしれないので触らない）
+          if (!f || String(parseInt(addr.muniCd.slice(0, 2), 10)) !== code) continue;
+          code = addr.muniCd;
+          fromPref = true;
+        }
+        const s = await settleAddress('city', code, v.coords, addr, v.place && v.place.address);
+        if (s.unsure) unsure = true;
+        const spotId = 'city-' + s.code;
+        if (spotId === v.spotId && addrKey(s.address) === addrKey(v.address)) continue;
+        const feat = featureByCode('city', s.code);
+        fixes.push({
+          v: v, fromPref: fromPref, spotId: spotId, address: s.address,
+          name: feat ? feat.properties.name : v.name,
+        });
+      }
+    } finally {
+      if (manual) hideBusy();
+    }
+
+    if (!fixes.length) {
+      if (!unsure) await Store.setMeta(ADDR_REVIEW_KEY, Date.now());
+      if (manual) toast(unsure ? '通信できないため、一部を確かめられませんでした' : '直すものはありませんでした');
+      return;
+    }
+    const label = (x) => (x.v.place && x.v.place.name) || x.v.name;
+    const lines = [];
+    const cityF = fixes.filter((x) => x.spotId !== x.v.spotId);
+    const townF = fixes.filter((x) => (x.address && x.address.lv01Nm) && (!x.v.address
+      || x.address.lv01Nm !== x.v.address.lv01Nm));
+    const listUp = (arr, fmt) => {
+      arr.slice(0, 6).forEach((x) => lines.push('　' + label(x) + '：' + fmt(x)));
+      if (arr.length > 6) lines.push('　ほか ' + (arr.length - 6) + '件');
+    };
+    if (cityF.length) {
+      lines.push('■ 付いている市区町村 ' + cityF.length + '件');
+      listUp(cityF, (x) => x.v.name + ' → ' + x.name);
+    }
+    if (townF.length) {
+      lines.push('■ 町名 ' + townF.length + '件');
+      listUp(townF, (x) => ((x.v.address && x.v.address.lv01Nm) || 'なし') + ' → ' + x.address.lv01Nm);
+    }
+    // ★画面に出ていないときは聞かない★ 裏に回ったアプリの確認は、読まれずに「いいえ」になる
+    if (!manual && document.visibilityState !== 'visible') return;
+    const asked = Date.now();
+    const ok = confirm('記録の住所を見直したところ、直した方がよいものがありました。\n\n'
+      + lines.join('\n') + '\n\n'
+      + '市区町村は国土地理院の住所に、町名は住所欄に入れた住所に合わせます。'
+      + 'メモ・写真・日時はそのままです。\n\n直しますか？');
+    // 一瞬で「いいえ」が返ったのは、人が押したのではなくブラウザが出さなかった。次に開いたときにまた聞く
+    if (!ok && Date.now() - asked < 300) return;
+    if (!ok) {
+      await Store.setMeta(ADDR_REVIEW_KEY, 'skip');
+      if (manual) toast('直しませんでした');
+      else toast('あとで直すときは、設定の「記録の住所を見直す」から');
+      return;
+    }
+    for (const x of fixes) {
+      await Store.updateVisit(Object.assign({}, x.v, {
+        spotId: x.spotId, category: 'city', name: x.name, address: x.address,
+      }));
+    }
+    await refreshVisited();
+    refreshMap(); renderList(); renderProgress();
+    if (!unsure) await Store.setMeta(ADDR_REVIEW_KEY, Date.now());
+    toast(fixes.length + '件の記録の住所を直しました');
+  }
+
+  // ---------------------------------------------------------------
   // 記録シート
   // ---------------------------------------------------------------
   function featureByCode(level, code) {
@@ -1941,9 +2189,7 @@
     };
 
     $('#sheet-title').textContent = feat.properties.name;
-    $('#sheet-sub').textContent = LEVELS[level].label +
-      (feat.properties.pref ? ' / ' + feat.properties.pref : '') +
-      (level === 'city' && feat.properties.pref ? '（都道府県もあわせて記録されます）' : '');
+    $('#sheet-sub').textContent = sheetSubText(level, feat);
     $('#visit-date').value = todayLocal();
     $('#visit-time').value = nowTimeLocal();
     $('#visit-memo').value = '';
@@ -1981,8 +2227,11 @@
       const addr = await reverseGeocode(coords.lat, coords.lng);
       if (state.selected && state.selected.code === String(code)) {
         state.selected.address = addr;
+        // 境界線ぎわで隣の市区町村を選んでいたら、地理院の答えに付け替える
+        const was = applyGeoCity();
         $('#sheet-address').textContent = addr
           ? '町丁目: ' + addr.lv01Nm
+            + (was ? '（地図の境界線では' + was + 'ですが、住所は' + state.selected.name + 'です）' : '')
           : '町丁目: 取得できませんでした（圏外でも記録はできます）';
       }
     } else {
@@ -2294,17 +2543,21 @@
     const c = state.pinMap.getCenter();
     const before = currentSheetCoords();
     const moved = before ? distMeters(before.lat, before.lng, c.lat, c.lng) : 0;
-    // ★市区町村をまたいだら黙って通さない★
-    // 記録がぶら下がっている市区町村（spotId）はここでは変えられないので、
-    // 位置だけ隣の市に動かすと、地図の点と塗られた市が食い違う。
-    const f = findAt(state.selected.level, c.lat, c.lng);
-    const here = f && String(f.properties.code) === String(state.selected.code);
-    if (!here) {
-      const nm = f ? f.properties.name : 'この場所';
-      if (!confirm('この位置は「' + nm + '」です。'
-        + 'この記録は「' + state.selected.name + '」に付いているので、'
-        + '位置だけがずれたままになります。\n\nそれでもここにしますか？'
-        + '\n（別の場所として記録し直す方が確実です）')) return;
+    const lv = state.selected.level;
+    // ★都道府県の記録は、県をまたいだら黙って通さない★
+    // 市区町村の記録は、動かした先の住所で市区町村も付け替える（v92〜）。
+    // 以前は市区町村でも確認を出していたが、判定に使う境界線が粗いので、
+    // 境界ぎわでは同じ市の中で動かしても「隣の市です」と言っていた。
+    if (lv !== 'city') {
+      const f = findAt(lv, c.lat, c.lng);
+      const here = f && String(f.properties.code) === String(state.selected.code);
+      if (!here) {
+        const nm = f ? f.properties.name : 'この場所';
+        if (!confirm('この位置は「' + nm + '」です。'
+          + 'この記録は「' + state.selected.name + '」に付いているので、'
+          + '位置だけがずれたままになります。\n\nそれでもここにしますか？'
+          + '\n（別の場所として記録し直す方が確実です）')) return;
+      }
     }
     state.selected.coords = { lat: c.lat, lng: c.lng };
     syncSheetCoordsText();
@@ -2314,12 +2567,22 @@
     // 町丁目は位置から引いているので、動かしたら引き直す
     $('#sheet-address').textContent = '町丁目を調べ直しています…';
     const addr = await reverseGeocode(c.lat, c.lng);
-    if (state.selected) {
-      state.selected.address = addr;
-      $('#sheet-address').textContent = addr
-        ? '町丁目: ' + addr.lv01Nm
-        : '町丁目: 取得できませんでした（圏外でも記録はできます）';
+    if (!state.selected) return;
+    state.selected.address = addr;
+    let was = '';
+    if (lv === 'city') {
+      if (addr) {
+        was = applyGeoCity();
+      } else {
+        // 圏外で住所が取れないときは、境界線で決める（何もしないよりは近い）
+        const f = findAt('city', c.lat, c.lng);
+        if (f) was = switchSheetCity(String(f.properties.code));
+      }
     }
+    $('#sheet-address').textContent = addr
+      ? '町丁目: ' + addr.lv01Nm
+      : '町丁目: 取得できませんでした（圏外でも記録はできます）';
+    if (was) toast('市区町村も「' + state.selected.name + '」に付け替えます。保存すると反映されます');
   }
 
 
@@ -2970,9 +3233,51 @@
       $('#visit-memo').value = '';
     });
 
+    // 住所欄に町名があれば、保存を待たずに町丁目の表示も合わせる（v92〜）
+    // 表示が「二丁目」のまま保存すると「一丁目」になる、では何が入ったのか分からない。
+    const pa = $('#place-address');
+    let paTimer = 0;
+    if (pa) pa.addEventListener('input', () => {
+      clearTimeout(paTimer);
+      paTimer = setTimeout(async () => {
+        const sel = state.selected;
+        const ed = state.editing;
+        if (!sel || sel.level !== 'city') return;
+        const s = await settleAddress('city', sel.code, sel.coords || (ed && ed.coords) || null,
+          sel.address || (ed && ed.address) || null, pa.value);
+        if (state.selected !== sel || !s.address) return;
+        $('#sheet-address').textContent = '町丁目: ' + s.address.lv01Nm
+          + (s.address.geoNm ? '（住所欄から。位置からは' + s.address.geoNm + '）' : '');
+      }, 600);
+    });
+
+    // ★保存は1回ずつ★ 住所の確かめで少し待つようになったので、2度押しで2件にならないようにする
     $('#visit-save').addEventListener('click', async () => {
-      if (!state.selected) return;
+      if (!state.selected || state.saving) return;
+      state.saving = true;
+      try {
+        await saveVisit();
+      } finally {
+        state.saving = false;
+      }
+    });
+
+    async function saveVisit() {
       const sel = state.selected;
+      const place = getPlace();
+      const ed = state.editing;
+      // ★市区町村は地理院の答え、町名は住所欄を優先する★（v92〜。settleAddress を参照）
+      const settled = await settleAddress(sel.level, sel.code,
+        sel.coords || (ed && ed.coords) || null,
+        sel.address || (ed && ed.address) || null,
+        place && place.address);
+      if (state.selected === sel) {
+        switchSheetCity(settled.code);
+      } else if (settled.code !== sel.code && featureByCode(sel.level, settled.code)) {
+        // 待っている間にシートが閉じられても、保存はそのまま続ける
+        sel.code = settled.code;
+        sel.name = featureByCode(sel.level, settled.code).properties.name;
+      }
       const spotId = spotIdOf(sel.level, sel.code);
 
       // 既存写真は元のIDを使い回し、新しく足したものだけ保存する
@@ -2993,6 +3298,9 @@
           if (!photoIds.includes(old)) await Store.deletePhoto(old);
         }
         await Store.updateVisit(Object.assign({}, v, {
+          // 位置や住所を直して市区町村が変わったら、記録もそちらに付け替える
+          spotId,
+          name: sel.name,
           visitedAt: $('#visit-date').value || v.visitedAt,
           visitedTime: $('#visit-time').value || '',
           memo: $('#visit-memo').value.trim(),
@@ -3001,13 +3309,13 @@
           rating: getRating(),
           revisit: $('#visit-revisit').checked,
           athome: $('#visit-athome').checked,
-          place: getPlace(),
+          place: place,
           goshuin: getGoshuin(),
           photoIds,
           gsPhotos,
           // ★位置を直したら書き戻す★ 触っていなければ元のまま
           coords: (sel && sel.coords) ? sel.coords : v.coords,
-          address: (sel && sel.address) ? sel.address : v.address,
+          address: settled.address,
           updatedAt: new Date().toISOString(),
         }));
       } else {
@@ -3023,11 +3331,11 @@
           rating: getRating(),
           revisit: $('#visit-revisit').checked,
           athome: $('#visit-athome').checked,
-          place: getPlace(),
+          place: place,
           goshuin: getGoshuin(),
           gsPhotos,
           coords: sel.coords,
-          address: sel.address,
+          address: settled.address,
           photoIds,
         });
       }
@@ -3042,7 +3350,7 @@
       clearExtraFields();
       clearPending();
       toast(sel.name + (wasEditing ? ' の記録を更新しました' : ' を記録しました'));
-    });
+    }
   }
 
   // 写真は長辺1600pxまで縮めてから保存する。
@@ -6995,11 +7303,17 @@
           + (r.photos ? '　写真 ' + r.photos + ' 枚\n' : '')
           + (r.photos ? '' : '\n写真は入っていないファイルです。'
             + '写真も戻すときは、写真のZIPも読み込んでください。'));
+        // 古いバックアップの記録は、古い判定の住所のまま入ってくるので見直す
+        Store.setMeta(ADDR_REVIEW_KEY, null)
+          .then(() => reviewSavedAddresses(false)).catch(() => {});
       } catch (err) {
         toast('読み込めませんでした: ' + err.message);
       }
       e.target.value = '';
     });
+
+    const rv = $('#btn-addr-review');
+    if (rv) rv.addEventListener('click', () => { reviewSavedAddresses(true).catch(() => {}); });
 
     $('#btn-clear').addEventListener('click', async () => {
       if (!confirm('すべての記録を削除します。よろしいですか？\nこの操作は取り消せません。')) return;
