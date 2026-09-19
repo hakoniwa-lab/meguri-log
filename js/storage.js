@@ -239,16 +239,30 @@ const Store = (() => {
     },
 
     // 持ち出す覚え書き。lastBackup はその端末の事情なので持ち出さない。
+    // ★通った道は日ごとのキー（trackDay:YYYY-MM-DD）にも入っている★（v93〜）
+    // 決め打ちの一覧だけだと、前の日の道がバックアップから抜ける。
     async exportMeta() {
-      const keys = ['passed', 'passedCounts', 'track', 'trackLineOn',
+      const keys = ['passed', 'passedCounts', 'track', 'trackDays', 'trackLineOn',
                     'collectDone', 'collectExtra',
                     'collections', 'hiddenTags', 'mapStyle'];
+      keys.push(...await this.metaKeys('trackDay:'));
       const out = {};
       for (const k of keys) {
         const v = await this.getMeta(k);
         if (v !== null && v !== undefined) out[k] = v;
       }
       return out;
+    },
+
+    async metaKeys(prefix) {
+      const keys = await reqToPromise(tx(['meta'], 'readonly').objectStore('meta').getAllKeys());
+      return keys.map(String).filter((k) => k.indexOf(prefix) === 0).sort();
+    },
+
+    async delMeta(key) {
+      const t = tx(['meta'], 'readwrite');
+      t.objectStore('meta').delete(key);
+      await new Promise((res, rej) => { t.oncomplete = res; t.onerror = () => rej(t.error); });
     },
 
     async importAll(data, { merge = true } = {}) {
@@ -271,17 +285,33 @@ const Store = (() => {
       await new Promise((res, rej) => { t.oncomplete = res; t.onerror = () => rej(t.error); });
 
       // 覚え書きは上書きで戻す（機種変で移すのが目的なので、古い端末の状態に合わせる）
+      // ★ただし通った道と通った市区町村は上書きしない★（v93〜）
+      // 古いバックアップを読むと、その後に走った道がまるごと巻き戻っていた
+      // （9/12と9/17のバックアップの道が1点残らず同じだった）。
+      // ここでは取り出して返すだけにし、つなぎ合わせはアプリ側（mergeImportedRoute）でする。
       const meta = data.meta;
+      const routeIn = [];
+      let passedIn = [];
       if (meta && typeof meta === 'object') {
         const mt = tx(['meta'], 'readwrite');
         const ms = mt.objectStore('meta');
-        Object.keys(meta).forEach((k) => ms.put({ key: k, value: meta[k] }));
+        Object.keys(meta).forEach((k) => {
+          const v = meta[k];
+          if (k === 'track' || k.indexOf('trackDay:') === 0) {
+            if (Array.isArray(v)) v.forEach((p) => routeIn.push(p));
+          } else if (k === 'passed') {
+            if (Array.isArray(v)) passedIn = v;
+          } else if (k !== 'trackDays') {
+            ms.put({ key: k, value: v });
+          }
+        });
         await new Promise((res) => { mt.oncomplete = res; });
       }
       return {
         visits: (data.visits || []).length,
         spots: (data.spots || []).length,
         photos: (data.photos || []).length,
+        routeIn, passedIn,
       };
     },
 

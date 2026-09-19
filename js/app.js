@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v92';
+  const APP_VERSION = 'v93';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -372,7 +372,7 @@
         setToggle('#btn-track-line', state.trackLineOn);
         await Store.setMeta('trackLineOn', state.trackLineOn);
         renderDayLines();                     // チップの出し入れも含めて描き直す
-        if (state.trackLineOn && !state.track.length) toast('通った道はまだ記録されていません');
+        if (state.trackLineOn && !hasTrack()) toast('通った道はまだ記録されていません');
       });
     }
 
@@ -4652,8 +4652,28 @@
   const TRACK_LINE_MIN = 40;                 // これだけ動いたら点を1つ足す
   const TRACK_GAP_MS = 5 * 60 * 1000;        // これ以上間が空いたら線を切る
   const TRACK_GAP_M = 3000;                  // 距離が飛んでいても切る（閉じていた間）
-  const TRACK_MAX_PTS = 30000;               // 貯めすぎない（古い方から捨てる）
   let trackSaveTimer = null;
+
+  // ★前の日の道は捨てずに、間引いて日ごとにしまう★（v93〜）
+  // v92までは「新しい方から3万点」しか持たず、古い方から捨てていた。
+  // 毎日長く走ると4日半で一杯になり、それより前の道はスマホの中からも消えていた
+  // （バックアップには入るが、入る前に消えている）。
+  //
+  // 今日の道: meta 'track'（拾ったままの点）
+  // 前の日の道: meta 'trackDay:YYYY-MM-DD'（間引いた点）、目次は meta 'trackDays' = {日付: 点の数}
+  // 日付が変わったとき・起動したとき・今日の点が多くなりすぎたときに、古い方を日ごとへ移す。
+  //
+  // 間引きは Douglas-Peucker（線からの外れが TRACK_THIN_M 以内の点を落とす）。
+  // 実際の3万点・1,430kmで、10mなら4,272点（14%）に減り、曲がり角の形は残る。
+  const TRACK_THIN_M = 10;
+  // ★間引いても線が切れないように★ 点の間が5分・3kmを超えると線を切って描くので、
+  // まっすぐな高速道路で点を全部落とすと、そこで線が途切れて見える。その手前で必ず点を残す。
+  const TRACK_THIN_GAP_MS = 4 * 60 * 1000;
+  const TRACK_THIN_GAP_M = 2500;
+  const TRACK_LIVE_MAX = 20000;              // 今日の点がこれを超えたら、古い方を先に間引いてしまう
+  const TRACK_LIVE_KEEP = 2000;              // そのとき手つかずで残す新しい点
+  const TRACK_DAY_KEY = 'trackDay:';
+  const trackDayCache = new Map();           // 日付 → 間引いた点（読んだ日だけ）
 
   async function loadPassed() {
     const saved = (await Store.getMeta('passed')) || [];
@@ -4661,9 +4681,170 @@
     state.passedCounts = !!(await Store.getMeta('passedCounts'));
     const tr = await Store.getMeta('track');
     state.track = Array.isArray(tr) ? tr : [];
+    const idx = await Store.getMeta('trackDays');
+    state.trackDayIdx = (idx && typeof idx === 'object') ? idx : {};
     const on = await Store.getMeta('trackLineOn');
     state.trackLineOn = (on === null || on === undefined) ? true : !!on;
     rebuildPassedPref();
+    // 前の日の分を日ごとへ移す（v92までの3万点も、初回にここで日ごとに分かれる）
+    try { await archiveTrack(startOfDayMs(Date.now())); } catch (e) { /* 次に開いたときにまた */ }
+  }
+
+  function startOfDayMs(t) {
+    const d = new Date(t);
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  }
+
+  // 1本の線（時刻順・途切れなし）を間引く。両端・曲がり角・間が空きすぎないための点を残す
+  function thinSegment(seg) {
+    const n = seg.length;
+    if (n < 3) return seg.slice();
+    const keep = new Uint8Array(n);
+    keep[0] = 1; keep[n - 1] = 1;
+    const lat0 = seg[0][0] * Math.PI / 180;
+    const kx = 111320 * Math.cos(lat0), ky = 110540;
+    const X = (p) => p[1] * kx, Y = (p) => p[0] * ky;
+    const stack = [[0, n - 1]];
+    while (stack.length) {
+      const [i, j] = stack.pop();
+      if (j - i < 2) continue;
+      const ax = X(seg[i]), ay = Y(seg[i]);
+      const bx = X(seg[j]) - ax, by = Y(seg[j]) - ay;
+      const L2 = bx * bx + by * by;
+      let far = -1, at = -1;
+      for (let x = i + 1; x < j; x++) {
+        const px = X(seg[x]) - ax, py = Y(seg[x]) - ay;
+        let d;
+        if (L2 === 0) d = Math.hypot(px, py);
+        else {
+          const u = Math.max(0, Math.min(1, (px * bx + py * by) / L2));
+          d = Math.hypot(px - u * bx, py - u * by);
+        }
+        if (d > far) { far = d; at = x; }
+      }
+      if (far > TRACK_THIN_M) {
+        keep[at] = 1;
+        stack.push([i, at], [at, j]);
+      }
+    }
+    // 間が空きすぎないように点を足す（次の点まで飛ぶと上限を超えるなら、今の点を残す）
+    let last = 0;
+    for (let i = 1; i < n - 1; i++) {
+      if (keep[i]) { last = i; continue; }
+      const a = seg[last], b = seg[i + 1];
+      if (b[2] - a[2] > TRACK_THIN_GAP_MS || distMeters(a[0], a[1], b[0], b[1]) > TRACK_THIN_GAP_M) {
+        keep[i] = 1; last = i;
+      }
+    }
+    return seg.filter((_, i) => keep[i]);
+  }
+
+  function thinTrack(points) {
+    let out = [];
+    for (const sg of trackSegments(points)) out = out.concat(thinSegment(sg));
+    return out;
+  }
+
+  async function trackDayPoints(day) {
+    if (trackDayCache.has(day)) return trackDayCache.get(day);
+    const v = state.trackDayIdx && state.trackDayIdx[day] ? await Store.getMeta(TRACK_DAY_KEY + day) : null;
+    const pts = Array.isArray(v) ? v : [];
+    trackDayCache.set(day, pts);
+    return pts;
+  }
+
+  // 点を日ごとの保管に足す（間引いてから）。
+  // ★同じ時間帯がもうあれば足さない★ 同じ道を2つのバックアップから読んでも二重にならない。
+  // 返り値: 新しく道が増えた日の一覧
+  async function addToDays(points) {
+    const byDay = new Map();
+    for (const p of points) {
+      const d = dayOfMs(p[2]);
+      if (!byDay.has(d)) byDay.set(d, []);
+      byDay.get(d).push(p);
+    }
+    const grew = [];
+    for (const [day, pts] of byDay) {
+      const have = await trackDayPoints(day);
+      const cover = trackSegments(have).map((sg) => [sg[0][2], sg[sg.length - 1][2]]);
+      const seen = new Set(have.map((p) => p[2]));
+      const fresh = pts
+        .filter((p) => !seen.has(p[2]) && !cover.some((c) => p[2] >= c[0] && p[2] <= c[1]))
+        .sort((a, b) => a[2] - b[2])
+        .filter((p, i, arr) => i === 0 || p[2] !== arr[i - 1][2]);
+      // ★しまってある線の続きなら、最後の点から続けて間引く★
+      // 少しずつ移したときに、続きの数点が「線にならない1点」として落ちないように
+      const lastHave = have.length ? have[have.length - 1] : null;
+      const ctx = (fresh.length && lastHave && lastHave[2] < fresh[0][2]
+        && fresh[0][2] - lastHave[2] <= TRACK_GAP_MS
+        && distMeters(lastHave[0], lastHave[1], fresh[0][0], fresh[0][1]) <= TRACK_GAP_M) ? lastHave : null;
+      // ぽつんと1点だけの所は線にならないので、しまわない（読み込むたびに「増えた」と数えないように）
+      const add = fresh.length
+        ? thinTrack(ctx ? [ctx].concat(fresh) : fresh).filter((p) => p !== ctx) : [];
+      if (!add.length) continue;
+      const merged = have.concat(add).sort((a, b) => a[2] - b[2]);
+      await Store.setMeta(TRACK_DAY_KEY + day, merged);
+      trackDayCache.set(day, merged);
+      state.trackDayIdx[day] = merged.length;
+      grew.push(day);
+    }
+    if (grew.length) await Store.setMeta('trackDays', state.trackDayIdx);
+    return grew;
+  }
+
+  // cutoff より前の点を、今日の分から日ごとの保管へ移す
+  async function archiveTrack(cutoff) {
+    const old = state.track.filter((p) => p[2] < cutoff);
+    if (!old.length) return;
+    await addToDays(old);
+    // 待っている間に足された点を落とさないよう、今の配列から外す
+    state.track = state.track.filter((p) => p[2] >= cutoff);
+    await Store.setMeta('track', state.track);
+  }
+
+  function maybeArchive() {
+    if (state.archiving || !state.track.length) return;
+    let cutoff = 0;
+    const today0 = startOfDayMs(Date.now());
+    const newest = state.track[state.track.length - 1][2];
+    // 日付が変わった。★今つながっている線は、途切れる（5分）まで待ってから移す★
+    // すぐ移すと、0時前の点が1点ずつ移って「線にならない1点」として落ちていた（検証で踏んだ）
+    if (state.track[0][2] < today0) cutoff = Math.min(today0, newest - TRACK_GAP_MS);
+    if (state.track.length > TRACK_LIVE_MAX) {
+      cutoff = Math.max(cutoff, state.track[state.track.length - TRACK_LIVE_KEEP][2]);
+    }
+    if (cutoff <= state.track[0][2]) return;
+    state.archiving = true;
+    archiveTrack(cutoff).catch(() => {}).then(() => { state.archiving = false; });
+  }
+
+  // バックアップから読んだ道と通った市区町村を、今あるものに足す（上書きしない）
+  async function mergeImportedRoute(points, passed) {
+    let addedCities = 0;
+    for (const id of (passed || [])) {
+      if (!state.passed.has(id)) { state.passed.add(id); addedCities++; }
+    }
+    if (addedCities) {
+      rebuildPassedPref();
+      await Store.setMeta('passed', Array.from(state.passed));
+    }
+    const good = (points || []).filter((p) => Array.isArray(p) && p.length >= 3
+      && isFinite(p[0]) && isFinite(p[1]) && isFinite(p[2]));
+    const today0 = startOfDayMs(Date.now());
+    const grew = await addToDays(good.filter((p) => p[2] < today0));
+    // 今日の分は、今日の点に混ぜる
+    const seen = new Set(state.track.map((p) => p[2]));
+    const todays = good.filter((p) => p[2] >= today0 && !seen.has(p[2]));
+    if (todays.length) {
+      state.track = state.track.concat(todays).sort((a, b) => a[2] - b[2]);
+      await Store.setMeta('track', state.track);
+      grew.push(dayOfMs(today0));
+    }
+    return { days: grew.length, cities: addedCities };
+  }
+
+  function hasTrack() {
+    return state.track.length > 0 || Object.keys(state.trackDayIdx || {}).length > 0;
   }
 
   // 動くたびに保存すると走っている間ずっと書き続けることになる。少し待ってまとめて書く。
@@ -4686,9 +4867,18 @@
 
   // 通った道が残っている日。記録が1つも無い日でも、走っていれば並ぶ
   function trackDays() {
-    const out = new Set();
+    const out = new Set(Object.keys(state.trackDayIdx || {}));
     for (const p of state.track) out.add(dayOfMs(p[2]));
     return out;
+  }
+
+  // その日の道（null なら全部の日）。前の日の保管分と今日の分を合わせて時刻順に
+  async function trackPointsFor(day) {
+    const days = day ? [day] : Array.from(trackDays()).sort();
+    let pts = [];
+    for (const d of days) pts = pts.concat(await trackDayPoints(d));
+    const live = day ? state.track.filter((p) => dayOfMs(p[2]) === day) : state.track;
+    return pts.concat(live).sort((a, b) => a[2] - b[2]);
   }
 
   function trackSegments(points) {
@@ -4707,15 +4897,15 @@
     return segs.filter((sg) => sg.length >= 2);
   }
 
-  function drawTrack() {
+  async function drawTrack() {
     if (!state.map) return;
-    if (state.trackLayer) { state.map.removeLayer(state.trackLayer); state.trackLayer = null; }
-    if (!state.trackLineOn || state.track.length < 2) return;
+    const my = (state.trackDrawSeq = (state.trackDrawSeq || 0) + 1);
     // ★「その日の移動の線」と同じ日付の切り替えに従う★
     // 何日分も重なると、どれが今日の道か読めない。
-    const pts = state.lineDay
-      ? state.track.filter((p) => dayOfMs(p[2]) === state.lineDay)
-      : state.track;
+    const pts = (state.trackLineOn && hasTrack()) ? await trackPointsFor(state.lineDay) : [];
+    if (my !== state.trackDrawSeq) return;      // 待っている間に次の描き直しが来た
+    if (state.trackLayer) { state.map.removeLayer(state.trackLayer); state.trackLayer = null; }
+    if (pts.length < 2) return;
     const g = L.layerGroup();
     for (const sg of trackSegments(pts)) {
       const pts = sg.map((p) => [p[0], p[1]]);
@@ -4876,9 +5066,8 @@
       added = true;
     }
     if (added) {
-      if (state.track.length > TRACK_MAX_PTS) {
-        state.track.splice(0, state.track.length - TRACK_MAX_PTS);
-      }
+      // 日付が変わった・今日の点が多すぎるときは、古い方を日ごとの保管へ（捨てない）
+      maybeArchive();
       saveTrackSoon();
       // 日付をまたいだら今日のチップが要る。自分で日を選んでいる間は触らない
       if (!state.lineDayPicked && state.lineDay !== dayOfMs(Date.now())) renderDayLines();
@@ -4951,13 +5140,18 @@
     }
     const clr = $('#btn-track-clear');
     if (clr) clr.addEventListener('click', async () => {
-      if (!state.passed.size && !state.track.length) { toast('通った記録はまだありません'); return; }
+      if (!state.passed.size && !hasTrack()) { toast('通った記録はまだありません'); return; }
       if (!confirm('通った印と、通った道の線を全部消しますか？\n記録（ピン）そのものは消えません。')) return;
       state.passed = new Set();
       state.track = [];
       rebuildPassedPref();
       await Store.setMeta('passed', []);
       await Store.setMeta('track', []);
+      // 前の日の道（日ごとの保管）も消す
+      for (const k of await Store.metaKeys(TRACK_DAY_KEY)) await Store.delMeta(k);
+      state.trackDayIdx = {};
+      trackDayCache.clear();
+      await Store.setMeta('trackDays', {});
       drawTrack();
       await refreshVisited();
       refreshMap(); renderProgress(); renderList();
@@ -7280,6 +7474,8 @@
           + `今の記録は消さず、ファイルの中身を追加します。
 `
           + `同じ記録が両方にある場合は、ファイル側の内容で上書きされます。
+`
+          + `通った道と通った市区町村は、今あるものにつなぎ合わせます（消えません）。
 
 `
           + `読み込みますか？`
@@ -7290,6 +7486,12 @@
         let r;
         try {
           r = await Store.importAll(data, { merge: true });
+          // ★通った道はつなぎ合わせる★ 以前は上書きで、しかも開いている画面の中の道が
+          // 読み直されないため、次の保存で読み込んだ中身をまた上書きしていた
+          if ((r.routeIn && r.routeIn.length) || (r.passedIn && r.passedIn.length)) {
+            showBusy('通った道をつなぎ合わせています');
+            r.route = await mergeImportedRoute(r.routeIn, r.passedIn);
+          }
           showBusy('地図を描き直しています');
           await refreshVisited();
           refreshMap(); renderList(); renderProgress(); renderBackupStatus();
@@ -7300,6 +7502,9 @@
         alert('読み込みました。\n\n'
           + '　記録 ' + r.visits + ' 件\n'
           + '　場所 ' + r.spots + ' 件\n'
+          + (r.route ? (r.route.days ? '　通った道 ' + r.route.days + ' 日分を足しました\n'
+            : '　通った道 新しい分はありませんでした（もう入っています）\n') : '')
+          + (r.route && r.route.cities ? '　通った市区町村 ' + r.route.cities + ' か所を足しました\n' : '')
           + (r.photos ? '　写真 ' + r.photos + ' 枚\n' : '')
           + (r.photos ? '' : '\n写真は入っていないファイルです。'
             + '写真も戻すときは、写真のZIPも読み込んでください。'));
