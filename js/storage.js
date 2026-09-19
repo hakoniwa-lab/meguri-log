@@ -242,8 +242,9 @@ const Store = (() => {
     // ★通った道は日ごとのキー（trackDay:YYYY-MM-DD）にも入っている★（v93〜）
     // 決め打ちの一覧だけだと、前の日の道がバックアップから抜ける。
     async exportMeta() {
+      // ★collectHide（リストの対象から外した場所）が抜けていた★（v94で足した）
       const keys = ['passed', 'passedCounts', 'track', 'trackDays', 'trackLineOn',
-                    'collectDone', 'collectExtra',
+                    'collectDone', 'collectExtra', 'collectHide',
                     'collections', 'hiddenTags', 'mapStyle'];
       keys.push(...await this.metaKeys('trackDay:'));
       const out = {};
@@ -276,32 +277,59 @@ const Store = (() => {
         t.objectStore('photos').clear();
         await new Promise((r) => { t.oncomplete = r; });
       }
+      // ★別の端末の記録と1つにまとめられるように★（v94〜）
+      // 記録の id は端末ごとに違うので、別の端末の記録はそのまま足される。
+      // ★同じ記録が両方にあるときは、新しく直した方を残す★
+      // 以前はファイル側で上書きしていたので、古いバックアップや、前に渡し合った端末のファイルを読むと、
+      // その後にこの端末で直した内容（メモ・住所など）が古い内容に戻っていた。
+      // 直した時刻（updatedAt、無ければ作った時刻）で比べ、同じならこの端末の方を残す。
+      // ※ 取引の途中で読みに行くと古いSafariで取引が閉じるので、先に全部読んでおく
+      const existing = new Map((await this.getAllVisits()).map((v) => [v.id, v]));
+      const stamp = (v) => String(v.updatedAt || v.createdAt || '');
+      let added = 0, replaced = 0, kept = 0;
       const t = tx(['visits', 'spots', 'photos'], 'readwrite');
       (data.spots || []).forEach((s) => t.objectStore('spots').put(s));
-      (data.visits || []).forEach((v) => t.objectStore('visits').put(v));
+      for (const v of (data.visits || [])) {
+        const cur = existing.get(v.id);
+        if (!cur) { t.objectStore('visits').put(v); added++; }
+        else if (stamp(v) > stamp(cur)) { t.objectStore('visits').put(v); replaced++; }
+        else kept++;
+      }
       for (const p of (data.photos || [])) {
         t.objectStore('photos').put({ id: p.id, blob: base64ToBlob(p.data, p.type), type: p.type });
       }
       await new Promise((res, rej) => { t.oncomplete = res; t.onerror = () => rej(t.error); });
 
-      // 覚え書きは上書きで戻す（機種変で移すのが目的なので、古い端末の状態に合わせる）
-      // ★ただし通った道と通った市区町村は上書きしない★（v93〜）
-      // 古いバックアップを読むと、その後に走った道がまるごと巻き戻っていた
-      // （9/12と9/17のバックアップの道が1点残らず同じだった）。
-      // ここでは取り出して返すだけにし、つなぎ合わせはアプリ側（mergeImportedRoute）でする。
+      // ★覚え書きも上書きしない★
+      // - 通った道・通った市区町村: 取り出して返し、アプリ側（mergeImportedRoute）でつなぎ合わせる（v93〜）
+      //   古いバックアップを読むと、その後に走った道がまるごと巻き戻っていた
+      // - 集めるリストの「行った」の印・自分で足した場所・外した場所・自分のリスト: 両方を合わせる（v94〜）
+      //   以前は読み込んだ側の内容で上書きしていたので、別の端末のファイルを読むと、この端末で付けた印が消えた
+      // - 設定（使うタグ・地図の種類など）: この端末にまだ無いときだけ入れる。機種変の新しい端末には入る
       const meta = data.meta;
       const routeIn = [];
       let passedIn = [];
       if (meta && typeof meta === 'object') {
+        const cur = {};
+        for (const k of Object.keys(meta)) cur[k] = await this.getMeta(k);
         const mt = tx(['meta'], 'readwrite');
         const ms = mt.objectStore('meta');
         Object.keys(meta).forEach((k) => {
           const v = meta[k];
+          const have = cur[k];
           if (k === 'track' || k.indexOf('trackDay:') === 0) {
             if (Array.isArray(v)) v.forEach((p) => routeIn.push(p));
           } else if (k === 'passed') {
             if (Array.isArray(v)) passedIn = v;
-          } else if (k !== 'trackDays') {
+          } else if (k === 'trackDays') {
+            // 目次はアプリ側で作り直す
+          } else if (k === 'collectDone' || k === 'collectHide') {
+            ms.put({ key: k, value: mergeNameLists(have, v, (x) => String(x)) });
+          } else if (k === 'collectExtra') {
+            ms.put({ key: k, value: mergeNameLists(have, v, placeKey) });
+          } else if (k === 'collections') {
+            ms.put({ key: k, value: mergeCollections(have, v) });
+          } else if (have === null || have === undefined) {
             ms.put({ key: k, value: v });
           }
         });
@@ -309,6 +337,7 @@ const Store = (() => {
       }
       return {
         visits: (data.visits || []).length,
+        added, replaced, kept,
         spots: (data.spots || []).length,
         photos: (data.photos || []).length,
         routeIn, passedIn,
@@ -374,6 +403,51 @@ const Store = (() => {
       return null;
     },
   };
+
+  // ---- 読み込みで2つの端末の覚え書きを合わせる（v94〜） ----
+  // 場所の見分け: 名前と位置（小数4桁、約10m）。「トイレ」のような同じ名前が別の所にあるため
+  function placeKey(it) {
+    if (!it || typeof it !== 'object') return String(it);
+    const r = (x) => (typeof x === 'number' ? x.toFixed(4) : '');
+    return (it.name || '') + '|' + r(it.lat) + '|' + r(it.lng);
+  }
+
+  // { リストのid: [名前 or 場所, ...] } どうしを合わせる。今の方を先に並べ、無いものだけ足す
+  function mergeNameLists(have, add, keyOf) {
+    const out = {};
+    const a = (have && typeof have === 'object') ? have : {};
+    const b = (add && typeof add === 'object') ? add : {};
+    for (const id of new Set(Object.keys(a).concat(Object.keys(b)))) {
+      const list = Array.isArray(a[id]) ? a[id].slice() : [];
+      const seen = new Set(list.map(keyOf));
+      for (const x of (Array.isArray(b[id]) ? b[id] : [])) {
+        const k = keyOf(x);
+        if (!seen.has(k)) { seen.add(k); list.push(x); }
+      }
+      out[id] = list;
+    }
+    return out;
+  }
+
+  // 自分のリスト（配られたリストを取り込んだものも含む）を合わせる。
+  // 同じidのリストは今の方を元にし、中身は無い場所だけ足す
+  function mergeCollections(have, add) {
+    const out = Array.isArray(have) ? have.map((c) => Object.assign({}, c)) : [];
+    const byId = new Map(out.map((c) => [c.id, c]));
+    for (const c of (Array.isArray(add) ? add : [])) {
+      if (!c || !c.id) continue;
+      const cur = byId.get(c.id);
+      if (!cur) { const n = Object.assign({}, c); out.push(n); byId.set(n.id, n); continue; }
+      const items = Array.isArray(cur.items) ? cur.items.slice() : [];
+      const seen = new Set(items.map(placeKey));
+      for (const it of (Array.isArray(c.items) ? c.items : [])) {
+        const k = placeKey(it);
+        if (!seen.has(k)) { seen.add(k); items.push(it); }
+      }
+      cur.items = items;
+    }
+    return out;
+  }
 
   function blobToBase64(blob) {
     return new Promise((resolve) => {
