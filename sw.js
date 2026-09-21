@@ -5,7 +5,7 @@
    index.html / css / js / data を変更したら、必ず VERSION を上げること。
    上げないと、既に開いたことのある端末は古いキャッシュを返し続け、
    修正がいつまでも届かない（Service Workerは sw.js 自体が変わったときだけ再インストールされる）。 */
-const VERSION = 'v95';
+const VERSION = 'v96';
 const SHELL = 'meguri-shell-' + VERSION;
 const TILES = 'meguri-tiles-' + VERSION;
 const TILE_LIMIT = 400;
@@ -107,8 +107,12 @@ self.addEventListener('fetch', (e) => {
   const p = url.pathname;
   const isCode = p.endsWith('/') || p.endsWith('.html') ||
                  p.endsWith('.js') || p.endsWith('.css') || p.endsWith('.webmanifest');
+  // ★配られているリスト（data/shared）もネットワーク優先★（v96〜）
+  // ここもキャッシュ優先だったため、場所を直したリストを配り直しても、
+  // 一度でも開いた端末には古い中身が返っていた（目録の件数も古いまま）。
+  const isShared = p.indexOf('/data/shared/') >= 0;
 
-  if (isCode) {
+  if (isCode || isShared) {
     e.respondWith(
       fetch(req).then((res) => {
         if (res && res.status === 200) {

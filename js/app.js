@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v95';
+  const APP_VERSION = 'v96';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -6639,25 +6639,39 @@
   // ファイルからでも配布からでも、自分のリストとして足すところは同じ
   async function installCollection(c, items) {
     const list = await customCollections();
-    const dup = list.find((x) => x.name === c.name);
+    const hasId = typeof c.id === 'string' && /^[a-z0-9_]{2,30}$/.test(c.id);
+    // ★同じリストの新しい版は、二重にせず中身を入れ替える★（v96〜）
+    // 場所を直したリストを配り直したとき、取り込み直すと同じリストが2本並んでいた。
+    // 手で付けた印は id で覚えているので、入れ替えても印は残る。
+    const same = hasId ? list.find((x) => x.id === c.id) : null;
+    const dup = !same && list.find((x) => x.name === c.name);
     const ok = confirm('「' + c.name + '」を読み込みます。\n' + items.length + ' か所'
+      + (same ? '\n\nこのリストはもう入っています。新しい内容に入れ替えます（付けた印はそのまま）。' : '')
       + (dup ? '\n\n同じ名前のリストが既にあります。別のリストとして足します。' : '')
       + '\n\n読み込みますか？');
     if (!ok) return false;
-    // ★配ったリストが元の id を持っていれば、それを使う★
-    // 手で付けた印や自分で足した場所は id で覚えている。id が変わると、
-    // 同梱から配布に移したリストを入れ直したときに、それまでの印が消える。
-    const keepId = (typeof c.id === 'string' && /^[a-z0-9_]{2,30}$/.test(c.id)
-      && !list.some((x) => x.id === c.id)) ? c.id : null;
-    list.push({
-      id: keepId || ('c-' + Date.now().toString(36)),
-      name: dup ? c.name + '（読み込み）' : c.name,
-      mark: c.mark || '📋', tag: c.tag || '', note: c.note || 'もらったリスト',
-      items: items,
-    });
+    if (same) {
+      same.name = c.name;
+      same.mark = c.mark || same.mark;
+      same.tag = c.tag || same.tag;
+      same.note = c.note || same.note;
+      same.items = items;
+    } else {
+      // ★配ったリストが元の id を持っていれば、それを使う★
+      // 手で付けた印や自分で足した場所は id で覚えている。id が変わると、
+      // 同梱から配布に移したリストを入れ直したときに、それまでの印が消える。
+      list.push({
+        id: hasId ? c.id : ('c-' + Date.now().toString(36)),
+        name: dup ? c.name + '（読み込み）' : c.name,
+        mark: c.mark || '📋', tag: c.tag || '', note: c.note || 'もらったリスト',
+        items: items,
+      });
+    }
     await saveCustom(list);
+    state.collections = null;                  // 数を数え直す
     await renderCollect();
-    toast('読み込みました（' + items.length + ' か所）');
+    toast(same ? '新しい内容に入れ替えました（' + items.length + ' か所）'
+               : '読み込みました（' + items.length + ' か所）');
     return true;
   }
 
@@ -6830,10 +6844,11 @@
     const mine = await customCollections();
     $('#cat-note').textContent = cat.lists.length
       + '本あります。「取り込む」を押すと、自分のリストとして入ります。'
-      + '同梱のリストと違って、いつでも消せます。';
+      + '同梱のリストと違って、いつでも消せます。'
+      + '場所やメモを直したときは、もう一度押すと新しい内容に入れ替わります（付けた印はそのまま）。';
     box.innerHTML = '';
     for (const e of cat.lists) {
-      const had = mine.some((m) => m.name === e.name);
+      const had = mine.some((m) => m.id === e.id || m.name === e.name);
       const row = document.createElement('div');
       row.className = 'catrow';
       row.innerHTML = '<span class="catrow__mark">' + (e.mark || '📋') + '</span>'
@@ -6845,8 +6860,12 @@
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'btn btn--sub btn--slim catrow__go';
-      b.textContent = had ? '取り込みずみ' : '取り込む';
+      // ★取り込みずみでも押せるようにする★（v96〜）
+      // 場所を直したリストを配り直しても、押せないままでは受け取れなかった。
+      // 押すと同じリストの中身が入れ替わる（手で付けた印はそのまま）。
+      b.textContent = had ? '新しい内容にする' : '取り込む';
       b.addEventListener('click', async () => {
+        const label = b.textContent;
         b.disabled = true;
         b.textContent = '読み込み中…';
         try {
@@ -6856,15 +6875,13 @@
           if (!c || !Array.isArray(c.items)) throw new Error('形が違う');
           const items = sharedItems(c.items);
           const done = await installCollection(c, items);
-          b.textContent = done ? '取り込みずみ' : '取り込む';
-          b.disabled = done;
+          b.textContent = done ? '新しい内容にする' : label;
         } catch (err) {
           toast('取り込めませんでした。通信を確かめてください');
-          b.disabled = false;
-          b.textContent = '取り込む';
+          b.textContent = label;
         }
+        b.disabled = false;
       });
-      b.disabled = had;
       row.appendChild(b);
       box.appendChild(row);
     }
