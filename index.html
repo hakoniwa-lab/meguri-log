@@ -17,7 +17,7 @@
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="stylesheet" href="./vendor/leaflet.css">
 <link rel="stylesheet" href="./css/style.css">
-<script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"会員登録やログインは必要ですか？","acceptedAnswer":{"@type":"Answer","text":"必要ありません。記録はお使いの端末の中だけに保存され、サーバーへの送信は行っていません。"}},{"@type":"Question","name":"位置情報は何に使われますか？","acceptedAnswer":{"@type":"Answer","text":"現在地から「今どの都道府県にいるか」を判定するためだけに使います。判定は端末の中で行われ、位置情報が外部に送信されることはありません。"}},{"@type":"Question","name":"機種変更したら記録は消えますか？","acceptedAnswer":{"@type":"Answer","text":"消えます。記録は端末内に保存されるためです。設定画面の「書き出し」でファイルを保存しておけば、新しい端末の「読み込み」で復元できます。"}},{"@type":"Question","name":"写真も保存できますか？","acceptedAnswer":{"@type":"Answer","text":"できます。記録するときに写真を添付でき、端末内に保存されます。保存時に長辺1600pxまで自動で縮小し、容量を使いすぎないようにしています。"}}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"会員登録やログインは必要ですか？","acceptedAnswer":{"@type":"Answer","text":"必要ありません。記録はお使いの端末の中だけに保存され、サーバーへの送信は行っていません。"}},{"@type":"Question","name":"位置情報は何に使われますか？","acceptedAnswer":{"@type":"Answer","text":"現在地から「今どの都道府県にいるか」を判定するためだけに使います。判定は端末の中で行われ、位置情報が外部に送信されることはありません。"}},{"@type":"Question","name":"機種変更したら記録は消えますか？","acceptedAnswer":{"@type":"Answer","text":"消えます。記録は端末内に保存されるためです。設定画面の「記録を保存」でファイルを保存しておけば、新しい端末の「読み込み」で復元できます。写真は「写真を保存」で別のファイルになります。"}},{"@type":"Question","name":"写真も保存できますか？","acceptedAnswer":{"@type":"Answer","text":"できます。記録するときに写真を添付でき、端末内に保存されます。保存時に長辺1600pxまで自動で縮小し、容量を使いすぎないようにしています。"}}]}</script>
 </head>
 <body>
 
@@ -274,6 +274,11 @@
           作ったリストは<b>人に渡せます</b>（渡るのは場所の名前・位置と、
           その場所に付けた<b>メモ・住所</b>まで。
           <b>あなたの訪問日・写真・記録のメモは入りません</b>）。</li>
+        <li><b>「配られているリスト」</b>は、こちらで用意した追加のリストです。
+          場所やメモを直したときは、<b>同じボタンをもう一度押すと新しい内容に入れ替わります</b>
+          （手で付けた印はそのまま残ります）。</li>
+        <li>区分の見出し（「城（8）」など）や<b>「自分のリスト」</b>の見出しを押すと<b>畳めます</b>。
+          見たいものだけを開いておけます。</li>
       </ul>
 
       <h3>地図を見やすくする</h3>
@@ -586,7 +591,7 @@
     <div class="card">
       <h2>データの保存について</h2>
       <p>記録は<b>この端末の中だけ</b>に保存されています。サーバーには何も送っていません。</p>
-      <p class="warn">ブラウザのデータを削除したり、機種変更をすると記録は消えます。ときどき「書き出し」でバックアップを取ってください。</p>
+      <p class="warn">ブラウザのデータを削除したり、機種変更をすると記録は消えます。ときどき下の<b>「記録を保存」</b>（写真もなら<b>「写真を保存」</b>も）でバックアップを取ってください。</p>
       <p class="muted" id="persist-info"></p>
       <button id="btn-persist" class="btn btn--sub btn--slim" hidden>保存を保護する</button>
       <p class="muted" id="storage-info"></p>
