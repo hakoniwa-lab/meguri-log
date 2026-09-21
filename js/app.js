@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v94';
+  const APP_VERSION = 'v95';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -6625,6 +6625,10 @@
         if (typeof i.note === 'string' && i.note) o.note = i.note.slice(0, 300);
         if (typeof i.address === 'string' && i.address) o.address = i.address.slice(0, 200);
         if (i.exact) o.exact = true;        // 近くの別の場所を巻き込まない印
+        // ★だいたいの位置の印も写す★（v95〜）
+        // 写していなかったので、配られたリストの「町のあたり」の点が
+        // ふつうの点として扱われ、400m以内を通っただけで「行った」になっていた
+        if (i.approx) o.approx = true;
         // 調べ先のリンク（v87〜）。★web は http(s) のものだけ写す★（javascript: などを入れない）
         if (i.wiki === 1 || (typeof i.wiki === 'string' && i.wiki && i.wiki.length <= 150)) o.wiki = i.wiki;
         if (typeof i.web === 'string' && /^https?:\/\//i.test(i.web) && i.web.length <= 400) o.web = i.web;
