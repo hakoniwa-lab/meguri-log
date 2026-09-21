@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v96';
+  const APP_VERSION = 'v97';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -5904,6 +5904,22 @@
       mine.innerHTML = '<p class="muted" style="padding:4px 2px">まだありません。</p>';
     } else {
       custom.forEach((c) => mine.appendChild(card(c)));
+    }
+    // ★自分のリストも畳める★（v96〜）ほかの区分と同じように、見出しを押すと閉じる
+    const fb = $('#btn-custom-fold');
+    const fbody = $('#collect-custom-body');
+    if (fb && fbody) {
+      const shut = folded.has('自分のリスト');
+      fb.innerHTML = '<i class="cgroup__caret"></i>自分のリスト（' + custom.length + '）';
+      fb.classList.toggle('is-folded', shut);
+      fbody.hidden = shut;
+      fb.onclick = async () => {
+        const now = !fbody.hidden;
+        fbody.hidden = now;
+        fb.classList.toggle('is-folded', now);
+        if (now) folded.add('自分のリスト'); else folded.delete('自分のリスト');
+        await Store.setMeta('collectFold', Array.from(folded));
+      };
     }
   }
 
