@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v98';
+  const APP_VERSION = 'v99';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -1513,10 +1513,14 @@
     return (v.visitedAt || '') + ' ' + (v.visitedTime || '00:00');
   }
 
-  // 「8/26 14:30」の形。時刻が無ければ日付だけ
+  // 「2026年10月3日 14:30」の形。時刻が無ければ日付だけ
+  // ★年を必ず出す★（v99）「8/26」だけだと、年をまたいで何度も来ている場所で
+  // 去年の分が今年の分の下に並び、順番がばらばらに見えた。
   function visitLabel(v) {
     const d = (v.visitedAt || '').split('-');
-    const day = d.length === 3 ? Number(d[1]) + '/' + Number(d[2]) : (v.visitedAt || '');
+    const day = d.length === 3
+      ? Number(d[0]) + '年' + Number(d[1]) + '月' + Number(d[2]) + '日'
+      : (v.visitedAt || '');
     return v.visitedTime ? day + ' ' + v.visitedTime : day;
   }
 
@@ -7126,17 +7130,26 @@
 
   // 写真のZIPを読み込む。★記録が無くても入れる★
   // 順番はどちらからでもよい（写真→記録の順に読んでも結びつく）。
-  async function importPhotoZip(file, onProgress) {
-    const list = await Zip.read(file);
+  // ★場所ごとのフォルダ（v86〜）は読み飛ばす★
+  // 「つくば市 筑波山神社/名前__id.jpg」の、最後の / より後ろだけを見る。
+  // パソコンで作り直したZIPに入る「フォルダそのもの」や隠しファイルも捨てる。
+  // 読み込む前の枚数（Zip.list の目次）と、実際に入れる分（Zip.read）の両方でこれを使う。
+  function zipPhotoFile(name, size) {
+    if (/\/$/.test(name) || !size) return '';
+    if (/(^|\/)__MACOSX\//.test(name)) return '';
+    const file = name.slice(name.lastIndexOf('/') + 1);
+    if (!file || file.charAt(0) === '.') return '';
+    return file;
+  }
+
+  // onCheck(何枚目, 全部) … ZIPの中の写真を1枚ずつ確かめている間の進み具合
+  // onProgress(何枚目, 全部) … 端末に入れている間の進み具合
+  async function importPhotoZip(file, onProgress, onCheck) {
+    const list = await Zip.read(file, onCheck);
     const put = [];
     for (const e of list) {
-      // ★場所ごとのフォルダ（v86〜）は読み飛ばす★
-      // 「つくば市 筑波山神社/名前__id.jpg」の、最後の / より後ろだけを見る。
-      // パソコンで作り直したZIPに入る「フォルダそのもの」や隠しファイルも捨てる。
-      if (/\/$/.test(e.name) || !e.blob.size) continue;
-      if (/(^|\/)__MACOSX\//.test(e.name)) continue;
-      const file = e.name.slice(e.name.lastIndexOf('/') + 1);
-      if (!file || file.charAt(0) === '.') continue;
+      const file = zipPhotoFile(e.name, e.blob.size);
+      if (!file) continue;
       const base = file.replace(/\.[^.]+$/, '');
       if (!base) continue;
       // 「名前__id」の形。__ が無ければ全体が id（v82以前に書き出したZIP）
@@ -7155,7 +7168,8 @@
   // ★時間のかかる処理は、動いていることを見せる★
   // 写真の読み込みは数百枚で数十秒かかる。何も出ないと「読み込んでいないのかな」と思って
   // 画面を閉じてしまい、途中までしか入らない。何枚目かを出し、閉じないように頼む。
-  function showBusy(text, done, total) {
+  // opts.sub … 補足の一文 / opts.onCancel … 渡したときだけ「やめる」を出す
+  function showBusy(text, done, total, opts) {
     const el = $('#busy');
     if (!el) return;
     el.hidden = false;
@@ -7164,6 +7178,15 @@
     $('#busy-count').textContent = has ? done + ' / ' + total : '';
     $('#busy-barbox').hidden = !has;
     if (has) $('#busy-bar').style.width = Math.round((done / total) * 100) + '%';
+    const sub = $('#busy-sub');
+    if (sub) { sub.textContent = (opts && opts.sub) || ''; sub.hidden = !(opts && opts.sub); }
+    const note = $('#busy-note');
+    if (note) note.hidden = !!(opts && opts.hideNote);
+    const cancel = $('#busy-cancel');
+    if (cancel) {
+      cancel.hidden = !(opts && opts.onCancel);
+      cancel.onclick = (opts && opts.onCancel) || null;
+    }
   }
   function hideBusy() {
     const el = $('#busy');
@@ -7445,41 +7468,89 @@
         pb.textContent = label;
       }
     });
-    $('#btn-import').addEventListener('click', () => $('#import-file').click());
+    // ★ファイルが届くまでの間も、待っていることを見せる★（v99）
+    // スマホでは、ファイルを選んでから「読み込みますか？」が出るまで1分以上かかることがあった。
+    // その間何も出ないので何度も押され、読み込みが重なっておかしくなった。
+    // 選ぶ画面を開くところから幕を出し、読み込みの途中はもう一度始めない。
+    const importInput = $('#import-file');
+    let importRunning = false;
+    let pickTimer = 0;
+    function endPickWait() {
+      clearTimeout(pickTimer);
+      hideBusy();
+    }
+    $('#btn-import').addEventListener('click', () => {
+      if (importRunning) { toast('読み込みの途中です。終わるまでお待ちください'); return; }
+      importInput.value = '';            // 同じファイルを選び直しても届くように
+      showBusy('ファイルを待っています', null, null, {
+        sub: 'ファイルを選ぶと、中身を確かめてから「読み込みますか？」と聞きます。'
+          + '写真のファイルは、選んでから出るまで1分以上かかることがあります。'
+          + 'ボタンを何度も押さずにお待ちください。',
+        hideNote: true,
+        onCancel: endPickWait,
+      });
+      // 選ぶのをやめた合図（cancel）が来ないブラウザのための保険。「待つのをやめる」でも閉じられる
+      pickTimer = setTimeout(endPickWait, 5 * 60 * 1000);
+      importInput.click();
+    });
+    importInput.addEventListener('cancel', endPickWait);
 
-    $('#import-file').addEventListener('change', async (e) => {
-      // ★写真のZIPも同じ入口で受ける★ 入口を分けると片方だけ読んで終わる
+    importInput.addEventListener('change', async (e) => {
+      endPickWait();
       const f0 = e.target.files && e.target.files[0];
-      if (f0 && /\.zip$/i.test(f0.name)) {
-        // ★黙って読み込まない★ 何も出ないと「読めたのか」が分からない。
-        // 先に中身の数を数えて見せ、押してもらってから入れる。
-        try {
-          const list = await Zip.read(f0);
-          const ok = confirm('写真のファイルを読み込みます。\n\n'
-            + '　' + f0.name + '\n'
-            + '　写真 ' + list.length + ' 枚（' + (f0.size / 1048576).toFixed(1) + 'MB）\n\n'
-            + '今ある写真は消えません。同じ写真は上書きされます。\n\n読み込みますか？');
-          if (!ok) { e.target.value = ''; return; }
-          showBusy('写真を読み込んでいます', 0, list.length);
-          const n = await importPhotoZip(f0, (done, all) => {
-            showBusy('写真を読み込んでいます', done, all);
-          });
-          showBusy('仕上げています');
-          await renderPhotoSize();
-          await renderHistory(true);
-          hideBusy();
-          alert('写真を ' + n + ' 枚読み込みました。');
-        } catch (err) {
-          hideBusy();
-          alert('読み込めませんでした: ' + err.message);
-        }
-        e.target.value = '';
-        return;
-      }
-      const file = e.target.files[0];
-      if (!file) return;
+      if (!f0) return;
+      if (importRunning) { e.target.value = ''; return; }
+      importRunning = true;
       try {
-        const data = JSON.parse(await file.text());
+        // ★写真のZIPも同じ入口で受ける★ 入口を分けると片方だけ読んで終わる
+        if (/\.zip$/i.test(f0.name)) await importPhotoFlow(f0);
+        else await importRecordFlow(f0);
+      } finally {
+        importRunning = false;
+        e.target.value = '';
+      }
+    });
+
+    async function importPhotoFlow(f0) {
+      // ★黙って読み込まない★ 何も出ないと「読めたのか」が分からない。
+      // 先に中身の数を数えて見せ、押してもらってから入れる。
+      // ★数えるのは目次だけ★（Zip.list）。1枚ずつ読むのは「はい」の後に1回だけ。
+      try {
+        showBusy('ファイルの中身を確かめています');
+        const ents = await Zip.list(f0);
+        const count = ents.filter((x) => zipPhotoFile(x.name, x.size)).length;
+        hideBusy();
+        const ok = confirm('写真のファイルを読み込みます。\n\n'
+          + '　' + f0.name + '\n'
+          + '　写真 ' + count + ' 枚（' + (f0.size / 1048576).toFixed(1) + 'MB）\n\n'
+          + '今ある写真は消えません。同じ写真は上書きされます。\n\n読み込みますか？');
+        if (!ok) return;
+        showBusy('写真を確かめています', 0, ents.length);   // 確かめるのはフォルダの分も含めた全部
+        const n = await importPhotoZip(f0, (done, all) => {
+          showBusy('写真を読み込んでいます', done, all);
+        }, (done, all) => {
+          showBusy('写真を確かめています', done, all);
+        });
+        showBusy('仕上げています');
+        await renderPhotoSize();
+        await renderHistory(true);
+        hideBusy();
+        alert('写真を ' + n + ' 枚読み込みました。');
+      } catch (err) {
+        hideBusy();
+        alert('読み込めませんでした: ' + err.message);
+      }
+    }
+
+    async function importRecordFlow(file) {
+      try {
+        showBusy('ファイルの中身を確かめています');
+        let data;
+        try {
+          data = JSON.parse(await file.text());
+        } finally {
+          hideBusy();
+        }
         if (!data || data.app !== 'meguri-log') {
           throw new Error('このファイルは めぐログ の書き出しデータではありません');
         }
@@ -7519,7 +7590,7 @@
 `
           + `読み込みますか？`
         );
-        if (!ok) { e.target.value = ''; return; }
+        if (!ok) return;
 
         showBusy('記録を読み込んでいます');
         let r;
@@ -7554,10 +7625,10 @@
         Store.setMeta(ADDR_REVIEW_KEY, null)
           .then(() => reviewSavedAddresses(false)).catch(() => {});
       } catch (err) {
+        hideBusy();
         toast('読み込めませんでした: ' + err.message);
       }
-      e.target.value = '';
-    });
+    }
 
     const rv = $('#btn-addr-review');
     if (rv) rv.addEventListener('click', () => { reviewSavedAddresses(true).catch(() => {}); });

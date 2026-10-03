@@ -1061,6 +1061,9 @@ a{color:var(--navy)}
 .busy__bar[hidden]{display:none}
 .busy__bar i{display:block; height:100%; width:0; background:var(--amber); transition:width .2s}
 .busy__box small{display:block; margin-top:10px; color:var(--muted); font-size:11.5px; line-height:1.6}
+.busy__box .busy__sub{margin:8px 0 0; font-weight:400; font-size:13px; line-height:1.6; text-align:left}
+.busy__sub[hidden], .busy__cancel[hidden], .busy__box small[hidden]{display:none}
+.busy__cancel{margin-top:12px}
 
 /* 吹き出しの「ホームページ・ウィキペディア・調べる」 */
 .linkchips{display:flex; flex-wrap:wrap; gap:6px; margin:8px 0 2px}

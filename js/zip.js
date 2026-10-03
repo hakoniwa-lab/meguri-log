@@ -11,7 +11,8 @@
 
    使い方:
      const blob = await Zip.write([{ name: 'p-1.jpg', blob: photoBlob }, ...]);
-     const list = await Zip.read(blob);   // [{ name, blob }]
+     const list = await Zip.read(blob, (done, all) => {});   // [{ name, blob }]
+     const ents = await Zip.list(blob);   // [{ name, size }] 目次だけ。数えるときはこちら（速い）
 */
 window.Zip = (function () {
   'use strict';
@@ -118,7 +119,10 @@ window.Zip = (function () {
     return new Blob(parts.concat(central, [end]), { type: 'application/zip' });
   }
 
-  async function read(blob) {
+  // ★中身の一覧だけを出す（目次を読むだけ）★
+  // 読み込む前の「◯枚入っています」はこれで数える。read() は写真1枚ごとに見出しを
+  // 読みに行くので、スマホでは1,000枚で1分以上かかり、その間何も出ずに何度も押された。
+  async function list(blob) {
     const size = blob.size;
     // 末尾から EOCD（終わりの印）を探す。コメントは付けていないので末尾22バイトのはず
     const tailLen = Math.min(size, 66000);
@@ -150,13 +154,25 @@ window.Zip = (function () {
         // 他所で作り直されたファイルを黙って捨てないよう、名前を添えて知らせる。
         throw new Error('圧縮されたZIPは読めません（' + name + '）');
       }
-      // 中身の位置は、そのファイルの見出しを読まないと分からない（名前と付加情報の長さが要る）
-      const lh = new Uint8Array(await blob.slice(lho, lho + 30).arrayBuffer());
-      const dataOff = lho + 30 + get16(lh, 26) + get16(lh, 28);
-      out.push({ name: name, blob: blob.slice(dataOff, dataOff + csize) });
+      out.push({ name: name, size: csize, lho: lho });
     }
     return out;
   }
 
-  return { write: write, read: read, crc32: crc32 };
+  // 中身を取り出す。onProgress(何個目, 全部) で進み具合を返す。
+  async function read(blob, onProgress) {
+    const ents = await list(blob);
+    const out = [];
+    for (let i = 0; i < ents.length; i++) {
+      const e = ents[i];
+      // 中身の位置は、そのファイルの見出しを読まないと分からない（名前と付加情報の長さが要る）
+      const lh = new Uint8Array(await blob.slice(e.lho, e.lho + 30).arrayBuffer());
+      const dataOff = e.lho + 30 + get16(lh, 26) + get16(lh, 28);
+      out.push({ name: e.name, blob: blob.slice(dataOff, dataOff + e.size) });
+      if (onProgress && (i % 20 === 0 || i === ents.length - 1)) onProgress(i + 1, ents.length);
+    }
+    return out;
+  }
+
+  return { write: write, read: read, list: list, crc32: crc32 };
 })();
