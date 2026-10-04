@@ -167,6 +167,23 @@ const Store = (() => {
       return reqToPromise(t.objectStore('photos').get(id));
     },
 
+    // 写真の id → 名前 の一覧（v101）。
+    // 写真のZIPを読み込むとき「もう入っている写真」を飛ばすのに使う。
+    async photoNames() {
+      const out = new Map();
+      await new Promise((resolve, reject) => {
+        const req = tx(['photos'], 'readonly').objectStore('photos').openCursor();
+        req.onsuccess = () => {
+          const c = req.result;
+          if (!c) { resolve(); return; }
+          out.set(c.key, (c.value && c.value.name) || '');
+          c.continue();
+        };
+        req.onerror = () => reject(req.error);
+      });
+      return out;
+    },
+
     // ---- 書き出し / 読み込み ----
     // 写真はBase64にしてJSONに同梱する。1ファイルで完結させ、
     // バックアップの取り違えが起きないようにする。

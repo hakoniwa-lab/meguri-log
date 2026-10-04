@@ -160,8 +160,9 @@ window.Zip = (function () {
   }
 
   // 中身を取り出す。onProgress(何個目, 全部) で進み具合を返す。
-  async function read(blob, onProgress) {
-    const ents = await list(blob);
+  // only … list() の結果から選んだものだけ取り出すときに渡す（省略で全部）
+  async function read(blob, onProgress, only) {
+    const ents = only || await list(blob);
     const out = [];
     for (let i = 0; i < ents.length; i++) {
       const e = ents[i];

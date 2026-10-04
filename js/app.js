@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v100';
+  const APP_VERSION = 'v101';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -7142,26 +7142,52 @@
     return file;
   }
 
+  // ZIPの中の1枚から id と名前を取り出す。写真でなければ null
+  function zipPhotoOf(ent) {
+    const file = zipPhotoFile(ent.name, ent.size);
+    if (!file) return null;
+    const base = file.replace(/\.[^.]+$/, '');
+    if (!base) return null;
+    // 「名前__id」の形。__ が無ければ全体が id（v82以前に書き出したZIP）
+    const k = base.lastIndexOf('__');
+    const id = k >= 0 ? base.slice(k + 2) : base;
+    if (!id) return null;
+    return { id: id, name: k >= 0 ? base.slice(0, k) : '', file: file, ent: ent };
+  }
+
+  // ★この端末に無い写真だけ入れる★（v101）
+  // 本人「同じ写真は上書きじゃなくて、違う写真だけ取り込めないか」。
+  // 写真の id は1枚ごとに決まっていて、同じ id なら中身も同じ。上書きしても得るものが無く、
+  // 1枚ずつ読む分だけ時間がかかっていた。目次（Zip.list）の名前から id を出して突き合わせる。
+  // もう入っている写真は中身を読まず、名前だけが違うときは名前を合わせる
+  // （前の上書きで、別の端末で付けた名前がそろっていたため）。
+  function planPhotoZip(ents, have) {
+    const add = [], rename = [];
+    let same = 0;
+    for (const e of ents) {
+      const p = zipPhotoOf(e);
+      if (!p) continue;
+      if (!have.has(p.id)) { add.push(p); continue; }
+      same++;
+      // 書き出すときに名前を整えている（safeName）ので、整えた形どうしで比べる
+      const now = safeName(have.get(p.id)).replace(/\.[^.]*$/, '');
+      if (p.name && p.name !== now) rename.push(p);
+    }
+    return { add: add, rename: rename, same: same, total: add.length + same };
+  }
+
   // onCheck(何枚目, 全部) … ZIPの中の写真を1枚ずつ確かめている間の進み具合
   // onProgress(何枚目, 全部) … 端末に入れている間の進み具合
-  async function importPhotoZip(file, onProgress, onCheck) {
-    const list = await Zip.read(file, onCheck);
-    const put = [];
-    for (const e of list) {
-      const file = zipPhotoFile(e.name, e.blob.size);
-      if (!file) continue;
-      const base = file.replace(/\.[^.]+$/, '');
-      if (!base) continue;
-      // 「名前__id」の形。__ が無ければ全体が id（v82以前に書き出したZIP）
-      const k = base.lastIndexOf('__');
-      const id = k >= 0 ? base.slice(k + 2) : base;
-      const nm = k >= 0 ? base.slice(0, k) : '';
-      if (!id) continue;
-      const rec = { id: id, blob: e.blob, size: e.blob.size, type: typeOf(file) };
-      if (nm) rec.name = nm;
-      put.push(rec);
-    }
-    if (!put.length) throw new Error('写真が入っていませんでした');
+  async function importPhotoZip(file, plan, onProgress, onCheck) {
+    for (const p of plan.rename) await Store.renamePhoto(p.id, p.name);
+    if (!plan.add.length) return 0;
+    const list = await Zip.read(file, onCheck, plan.add.map((p) => p.ent));
+    const put = list.map((e, i) => {
+      const p = plan.add[i];
+      const rec = { id: p.id, blob: e.blob, size: e.blob.size, type: typeOf(p.file) };
+      if (p.name) rec.name = p.name;
+      return rec;
+    });
     return await Store.putPhotosRaw(put, onProgress);
   }
 
@@ -7529,15 +7555,26 @@
       try {
         showBusy('ファイルの中身を確かめています');
         const ents = await Zip.list(f0);
-        const count = ents.filter((x) => zipPhotoFile(x.name, x.size)).length;
+        const plan = planPhotoZip(ents, await Store.photoNames());
         hideBusy();
+        if (!plan.total) throw new Error('写真が入っていませんでした');
+        if (!plan.add.length && !plan.rename.length) {
+          alert('この端末に無い写真はありませんでした。\n\n'
+            + '　' + f0.name + '\n'
+            + '　写真 ' + plan.total + ' 枚は、どれももう入っています。');
+          return;
+        }
         const ok = confirm('写真のファイルを読み込みます。\n\n'
           + '　' + f0.name + '\n'
-          + '　写真 ' + count + ' 枚（' + (f0.size / 1048576).toFixed(1) + 'MB）\n\n'
-          + '今ある写真は消えません。同じ写真は上書きされます。\n\n読み込みますか？');
+          + '　写真 ' + plan.total + ' 枚（' + (f0.size / 1048576).toFixed(1) + 'MB）\n'
+          + '　　この端末に無い写真 ' + plan.add.length + ' 枚 → 読み込みます\n'
+          + (plan.same ? '　　もう入っている写真 ' + plan.same + ' 枚 → そのまま\n' : '')
+          + (plan.rename.length ? '　　（そのうち名前が違う ' + plan.rename.length + ' 枚は、名前だけ合わせます）\n' : '')
+          + '\n今ある写真は消えません。\n\n読み込みますか？');
         if (!ok) return;
-        showBusy('写真を確かめています', 0, ents.length);   // 確かめるのはフォルダの分も含めた全部
-        const n = await importPhotoZip(f0, (done, all) => {
+        if (plan.rename.length) showBusy('写真の名前を合わせています');
+        else showBusy('写真を確かめています', 0, plan.add.length);
+        const n = await importPhotoZip(f0, plan, (done, all) => {
           showBusy('写真を読み込んでいます', done, all);
         }, (done, all) => {
           showBusy('写真を確かめています', done, all);
@@ -7546,7 +7583,9 @@
         await renderPhotoSize();
         await renderHistory(true);
         hideBusy();
-        alert('写真を ' + n + ' 枚読み込みました。');
+        alert('写真を ' + n + ' 枚読み込みました。'
+          + (plan.same ? '\nもう入っていた ' + plan.same + ' 枚はそのままです。' : '')
+          + (plan.rename.length ? '\n名前を合わせた写真 ' + plan.rename.length + ' 枚' : ''));
       } catch (err) {
         hideBusy();
         alert('読み込めませんでした: ' + err.message);
