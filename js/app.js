@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v101';
+  const APP_VERSION = 'v102';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -198,6 +198,7 @@
     lastPlace: null,    // 同じ地点の前回の場所情報（引き継ぎ用）
     histMode: 'visits', // 記録タブの表示（visits / chome / year / stats）
     histYear: '',       // 1年ごとで見ている年
+    yshot: null,        // ふりかえりの画像を開いている間だけ { all, y, file }
     gsFilter: {},       // 御朱印一覧の絞り込み
     gsEditing: null,    // 写真ごとの御朱印を編集中の位置（数値=1枚 / 配列=まとめて）
     gsPick: null,       // まとめて選んでいる最中の写真の番号
@@ -247,6 +248,7 @@
     initSnsAdd();
     initViewer();
     initHistory();
+    initYearShot();
     initSettings();
     initCollect();
     initStations();
@@ -4249,6 +4251,61 @@
     return Array.from(c.entries()).sort((a, b) => b[1] - a[1]).map((e) => e[0]);
   }
 
+  // 記録の都道府県コード（数字）。市区町村の記録は頭2桁が県
+  function prefNumOf(v) {
+    const s = String(v.spotId || '');
+    if (s.indexOf('pref-') === 0) return Number(s.slice(5)) || 0;
+    if (s.indexOf('city-') === 0) return Number(s.slice(5, 7)) || 0;
+    return 0;
+  }
+
+  // ★1年分の数字は1か所で出す★（v102）画面と画像で数字が食い違わないように。
+  // ★都道府県は市区町村の記録からも数える★ 前は category が pref の記録（県の塗り分けで
+  // 県を押した記録）しか見ておらず、市区町村や地点で記録した県が「新しく行った」に入らなかった。
+  // 「出かけていない」記録は行った数に入れない（通販の記録で自宅の県が数えられないように）。
+  function yearStats(all, y) {
+    const dated = all.filter((v) => (v.visitedAt || '').length >= 4);
+    const mine = dated.filter((v) => v.visitedAt.slice(0, 4) === y);
+    const out = mine.filter((v) => !v.athome);
+    const firstPref = new Map(), firstCity = new Map();
+    const earlier = (m, k, yy) => { if (!m.has(k) || yy < m.get(k)) m.set(k, yy); };
+    for (const v of dated) {
+      if (v.athome) continue;
+      const yy = v.visitedAt.slice(0, 4);
+      const p = prefNumOf(v);
+      if (p) earlier(firstPref, p, yy);
+      if (v.category === 'city' && v.spotId) earlier(firstCity, v.spotId, yy);
+    }
+    const prefs = new Set(out.map(prefNumOf).filter(Boolean));
+    const cities = new Set(out.filter((v) => v.category === 'city' && v.spotId).map((v) => v.spotId));
+    const newPref = new Set(Array.from(prefs).filter((p) => firstPref.get(p) === y));
+    const newCity = new Set(Array.from(cities).filter((c) => firstCity.get(c) === y));
+    const names = new Map();
+    for (const v of out) {
+      const n = ((v.place && v.place.name) || v.name || '').trim();
+      if (n) names.set(n, (names.get(n) || 0) + 1);
+    }
+    // 月ごと・何で行ったか は画像用。★出かけた記録だけ★（通販の記録が「買い物」に入っていた）
+    const months = new Array(12).fill(0);
+    for (const v of out) {
+      const m = Number(v.visitedAt.slice(5, 7));
+      if (m >= 1 && m <= 12) months[m - 1]++;
+    }
+    const tags = new Map();
+    for (const v of out) tags.set(v.tag || '', (tags.get(v.tag || '') || 0) + 1);
+    let goshuin = 0;
+    mine.forEach((v) => { goshuin += goshuinOf(v).length; });
+    const spent = mine.reduce((n, v) => n + (Number(v.amount) || 0), 0);
+    const spentHome = mine.reduce((n, v) => n + (v.athome ? (Number(v.amount) || 0) : 0), 0);
+    return {
+      year: y, mine: mine, out: out,
+      days: new Set(out.map((v) => v.visitedAt)).size,
+      names: names, prefs: prefs, newPref: newPref, cities: cities, newCity: newCity,
+      photos: mine.reduce((n, v) => n + (v.photoIds || []).length, 0),
+      months: months, tags: tags, goshuin: goshuin, spent: spent, spentHome: spentHome,
+    };
+  }
+
   function renderYear(box, all) {
     $('#hist-summary').textContent = '';
     box.innerHTML = '';
@@ -4273,22 +4330,16 @@
     }
     box.appendChild(chips);
 
-    const mine = dated.filter((v) => v.visitedAt.slice(0, 4) === y);
-    // spotId ごとの「いちばん古い記録の年」。これが y ならその年が初めて。
-    const firstYear = new Map();
-    for (const v of dated) {
-      const k = v.category + ':' + v.spotId;
-      const yy = v.visitedAt.slice(0, 4);
-      if (!firstYear.has(k) || yy < firstYear.get(k)) firstYear.set(k, yy);
-    }
-    const newPref = new Set();
-    const newCity = new Set();
-    for (const v of mine) {
-      const k = v.category + ':' + v.spotId;
-      if (firstYear.get(k) !== y) continue;
-      if (v.category === 'pref') newPref.add(v.spotId);
-      if (v.category === 'city') newCity.add(v.spotId);
-    }
+    // ★画像にして人に見せる★（v102・予定一覧にあったもの）
+    const shot = document.createElement('button');
+    shot.type = 'button';
+    shot.className = 'btn btn--sub yshotbtn';
+    shot.textContent = '🖼️ ' + y + '年のふりかえりを画像にする';
+    shot.addEventListener('click', () => { openYearShot(all, y); });
+    box.appendChild(shot);
+
+    const st = yearStats(all, y);
+    const mine = st.mine;
 
     const card = (title, rows) => {
       if (!rows.length) return null;
@@ -4309,21 +4360,16 @@
       return c;
     };
 
-    const out = mine.filter((v) => !v.athome);          // 出かけた記録だけ
-    const days = new Set(out.map((v) => v.visitedAt));
-    const names = new Set();
-    for (const v of out) {
-      const n = ((v.place && v.place.name) || v.name || '').trim();
-      if (n) names.add(n);
-    }
-    const photos = mine.reduce((n, v) => n + (v.photoIds || []).length, 0);
+    const out = st.out;                                 // 出かけた記録だけ
     card(y + '年のふりかえり', [
       ['記録', mine.length + ' 件'],
-      ['出かけた日', days.size + ' 日'],
-      ['行った場所（名前ちがい）', names.size + ' か所'],
-      ['新しく行った都道府県', newPref.size + ' / 47'],
-      ['新しく行った市区町村', newCity.size + ' / ' + LEVELS.city.total],
-      ['写真', photos + ' 枚'],
+      ['出かけた日', st.days + ' 日'],
+      ['行った場所（名前ちがい）', st.names.size + ' か所'],
+      ['行った都道府県', st.prefs.size + ' / 47'],
+      ['新しく行った都道府県', st.newPref.size + ' / 47'],
+      ['行った市区町村', st.cities.size + ' / ' + LEVELS.city.total],
+      ['新しく行った市区町村', st.newCity.size + ' / ' + LEVELS.city.total],
+      ['写真', st.photos + ' 枚'],
     ]);
 
     // 月ごと。数字だけだと差が分からないので細い棒を添える
@@ -4381,6 +4427,318 @@
       }
       card('使ったお金', rows);
     }
+  }
+
+  // ---------------------------------------------------------------
+  // 1年のふりかえりを画像にする（v102）
+  // ---------------------------------------------------------------
+  // 本人の予定一覧「1年のふりかえりを画像にして、そのまま人に見せられるようにする」。
+  // ★人に見せる前提★ メモ・住所・写真そのもの・出かけていない記録は入れない。
+  // 場所の名前（自宅や仕事先が並ぶ）とお金は、チェックを付けたときだけ入れる。
+  const YS_FONT = '"Hiragino Kaku Gothic ProN","Hiragino Sans","Noto Sans JP","Yu Gothic UI","Meiryo",sans-serif';
+  const YS_W = 1080;
+  const YS_COL = {
+    navy: '#2c3e62', amber: '#e8a33d', deep: '#c75f12', cream: '#f5f1e8', ink: '#1f2733',
+    muted: '#6b7684', line: '#dfe4ec', land: '#e4dfd3', sea: '#ffffff',
+  };
+
+  // 都道府県の形を描く。本土は大きく、奄美・沖縄は左上の枠に入れる（そのままだと日本が小さくなる）
+  function ysDrawJapan(ctx, geo, st, x, y, w) {
+    const k = Math.cos(37 * Math.PI / 180);
+    const MAIN = { lon0: 128.3, lon1: 146.0, lat0: 30.2, lat1: 45.7 };
+    const h = Math.round(w * (MAIN.lat1 - MAIN.lat0) / ((MAIN.lon1 - MAIN.lon0) * k));
+    const fillOf = (code) => st.newPref.has(code) ? YS_COL.deep : (st.prefs.has(code) ? YS_COL.amber : YS_COL.land);
+    const paint = (box, rx, ry, rw, rh) => {
+      const sx = rw / ((box.lon1 - box.lon0) * k), sy = rh / (box.lat1 - box.lat0);
+      ctx.save();
+      ctx.beginPath(); ctx.rect(rx, ry, rw, rh); ctx.clip();
+      for (const f of geo.features) {
+        const g = f.geometry;
+        const polys = g.type === 'Polygon' ? [g.coordinates] : g.coordinates;
+        ctx.beginPath();
+        for (const poly of polys) {
+          for (const ring of poly) {
+            ring.forEach((p, i) => {
+              const px = rx + (p[0] - box.lon0) * k * sx;
+              const py = ry + (box.lat1 - p[1]) * sy;
+              if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py);
+            });
+            ctx.closePath();
+          }
+        }
+        ctx.fillStyle = fillOf(Number(f.properties.code));
+        ctx.fill('evenodd');
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+      }
+      ctx.restore();
+    };
+    paint(MAIN, x, y, w, h);
+    // 左上の枠（奄美・沖縄）
+    const INSET = { lon0: 122.9, lon1: 130.4, lat0: 24.0, lat1: 28.6 };
+    const iw = Math.round(w * 0.42);
+    const ih = Math.round(iw * (INSET.lat1 - INSET.lat0) / ((INSET.lon1 - INSET.lon0) * k));
+    const ix = x + 6, iy = y + 6;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(ix, iy, iw, ih);
+    paint(INSET, ix, iy, iw, ih);
+    ctx.strokeStyle = YS_COL.line;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(ix, iy, iw, ih);
+    return h;
+  }
+
+  // 長い名前は「…」で詰める
+  function ysFit(ctx, text, max) {
+    if (ctx.measureText(text).width <= max) return text;
+    let t = text;
+    while (t.length > 1 && ctx.measureText(t + '…').width > max) t = t.slice(0, -1);
+    return t + '…';
+  }
+
+  async function drawYearShot(all, y, opts) {
+    if (!state.geo.pref) await ensureLevelData('pref');
+    const st = yearStats(all, y);
+    const pad = 48, cw = YS_W - pad * 2;
+    const cv = document.createElement('canvas');
+    cv.width = YS_W;
+    cv.height = 4200;                       // 描き終わってから使った高さで切る
+    const ctx = cv.getContext('2d');
+    const font = (px, bold) => (bold ? '700 ' : '400 ') + px + 'px ' + YS_FONT;
+    ctx.fillStyle = YS_COL.cream;
+    ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.textBaseline = 'alphabetic';
+
+    // 見出し
+    ctx.fillStyle = YS_COL.navy;
+    ctx.fillRect(0, 0, YS_W, 200);
+    ctx.fillStyle = YS_COL.amber;
+    ctx.font = font(34, true);
+    ctx.fillText('めぐログ', pad, 72);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = font(66, true);
+    ctx.fillText(y + '年のふりかえり', pad, 156);
+    let cy = 236;
+
+    // 地図
+    const card = (top, height) => {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(pad - 16, top, cw + 32, height);
+    };
+    if (state.geo.pref) {
+      const mh = Math.round(cw * (45.7 - 30.2) / ((146.0 - 128.3) * Math.cos(37 * Math.PI / 180)));
+      card(cy, mh + 120);
+      ysDrawJapan(ctx, state.geo.pref, st, pad, cy + 16, cw);
+      let ly = cy + 16 + mh + 56;
+      const sw = (col, label, lx) => {
+        ctx.fillStyle = col;
+        ctx.fillRect(lx, ly - 30, 34, 34);
+        ctx.fillStyle = YS_COL.ink;
+        ctx.font = font(32, true);
+        ctx.fillText(label, lx + 48, ly);
+        return lx + 48 + ctx.measureText(label).width + 40;
+      };
+      let lx = sw(YS_COL.amber, '行った都道府県 ' + st.prefs.size + ' / 47', pad);
+      sw(YS_COL.deep, 'うち初めて ' + st.newPref.size, lx);
+      cy += mh + 120 + 28;
+    }
+
+    // 数字のます（2列×3段）
+    const cells = [
+      ['出かけた日', st.days, '日'],
+      ['行った場所', st.names.size, 'か所'],
+      ['行った市区町村', st.cities.size, ''],
+      ['新しく行った市区町村', st.newCity.size, ''],
+      ['写真', st.photos, '枚'],
+      ['御朱印・御城印など', st.goshuin, '体'],
+    ];
+    const cellW = (cw - 24) / 2, cellH = 170;
+    cells.forEach((c, i) => {
+      const cx = pad + (i % 2) * (cellW + 24);
+      const top = cy + Math.floor(i / 2) * (cellH + 20);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(cx - 16, top, cellW + 16, cellH);
+      ctx.fillStyle = YS_COL.muted;
+      ctx.font = font(28, false);
+      ctx.fillText(c[0], cx + 8, top + 50);
+      ctx.fillStyle = YS_COL.navy;
+      ctx.font = font(76, true);
+      const num = c[1].toLocaleString('ja-JP');
+      ctx.fillText(num, cx + 8, top + 138);
+      if (c[2]) {
+        const nw = ctx.measureText(num).width;
+        ctx.font = font(32, true);
+        ctx.fillText(c[2], cx + 16 + nw, top + 138);
+      }
+    });
+    cy += 3 * (cellH + 20) + 12;
+
+    const title = (t) => {
+      ctx.fillStyle = YS_COL.navy;
+      ctx.font = font(36, true);
+      ctx.fillText(t, pad, cy + 40);
+      cy += 64;
+    };
+
+    // 月ごとの記録
+    title('月ごとに出かけた記録');
+    {
+      const chartH = 220, top = cy + 20, colW = cw / 12;
+      card(cy - 8, chartH + 116);
+      const max = Math.max(1, Math.max.apply(null, st.months));
+      st.months.forEach((n, i) => {
+        const bx = pad + i * colW + colW * 0.18, bw = colW * 0.64;
+        const bh = Math.round((n / max) * (chartH - 40));
+        const by = top + 20 + (chartH - 40) - bh;
+        ctx.fillStyle = n ? YS_COL.amber : YS_COL.line;
+        ctx.fillRect(bx, n ? by : top + chartH - 24, bw, n ? bh : 4);
+        ctx.textAlign = 'center';
+        if (n) {
+          ctx.fillStyle = YS_COL.ink;
+          ctx.font = font(24, true);
+          ctx.fillText(String(n), bx + bw / 2, by - 8);
+        }
+        ctx.fillStyle = YS_COL.muted;
+        ctx.font = font(24, false);
+        ctx.fillText((i + 1) + '月', bx + bw / 2, top + chartH + 40);
+        ctx.textAlign = 'left';
+      });
+      cy += chartH + 116 + 20;
+    }
+
+    // 何で行ったか（多い順・6つまで。未設定は出さない）
+    const tagRows = TAGS.filter((t) => t.key && st.tags.get(t.key))
+      .sort((a, b) => st.tags.get(b.key) - st.tags.get(a.key)).slice(0, 6);
+    if (tagRows.length) {
+      title('何で行ったか');
+      const rows = Math.ceil(tagRows.length / 2), rowH = 60;
+      card(cy - 8, rows * rowH + 24);
+      tagRows.forEach((t, i) => {
+        const tx = pad + (i % 2) * (cw / 2), ty = cy + 44 + Math.floor(i / 2) * rowH;
+        ctx.fillStyle = YS_COL.ink;
+        ctx.font = font(32, false);
+        ctx.fillText(ysFit(ctx, t.mark + ' ' + t.label, cw / 2 - 150), tx, ty);
+        ctx.font = font(32, true);
+        ctx.textAlign = 'right';
+        ctx.fillText(st.tags.get(t.key) + ' 件', tx + cw / 2 - 40, ty);
+        ctx.textAlign = 'left';
+      });
+      cy += rows * rowH + 24 + 20;
+    }
+
+    // よく行った場所（選んだときだけ）
+    if (opts.places) {
+      const top5 = Array.from(st.names.entries()).filter((e) => e[1] > 1)
+        .sort((a, b) => b[1] - a[1]).slice(0, 5);
+      if (top5.length) {
+        title('よく行った場所');
+        card(cy - 8, top5.length * 58 + 24);
+        top5.forEach((e, i) => {
+          const ty = cy + 44 + i * 58;
+          ctx.fillStyle = YS_COL.ink;
+          ctx.font = font(32, false);
+          ctx.fillText(ysFit(ctx, (i + 1) + '. ' + e[0], cw - 160), pad, ty);
+          ctx.font = font(32, true);
+          ctx.textAlign = 'right';
+          ctx.fillText(e[1] + ' 回', pad + cw, ty);
+          ctx.textAlign = 'left';
+        });
+        cy += top5.length * 58 + 24 + 20;
+      }
+    }
+
+    // 使ったお金（選んだときだけ。出かけた分だけ）
+    if (opts.money && st.spent - st.spentHome > 0) {
+      title('使ったお金');
+      card(cy - 8, 84);
+      ctx.fillStyle = YS_COL.ink;
+      ctx.font = font(32, false);
+      ctx.fillText('出かけた先で', pad, cy + 46);
+      ctx.font = font(40, true);
+      ctx.textAlign = 'right';
+      ctx.fillText('¥' + (st.spent - st.spentHome).toLocaleString('ja-JP'), pad + cw, cy + 48);
+      ctx.textAlign = 'left';
+      cy += 84 + 20;
+    }
+
+    // 足もと
+    cy += 16;
+    ctx.fillStyle = YS_COL.muted;
+    ctx.font = font(26, false);
+    ctx.textAlign = 'center';
+    ctx.fillText('めぐログ ｜ 行った場所を、地図とリストで集めるアプリ', YS_W / 2, cy + 20);
+    ctx.textAlign = 'left';
+    cy += 56;
+
+    // 使った高さで切る
+    const outCv = document.createElement('canvas');
+    outCv.width = YS_W;
+    outCv.height = Math.ceil(cy);
+    outCv.getContext('2d').drawImage(cv, 0, 0);
+    const blob = await new Promise((r) => outCv.toBlob(r, 'image/png'));
+    return new File([blob], 'めぐログ-' + y + '年のふりかえり.png', { type: 'image/png' });
+  }
+
+  async function openYearShot(all, y) {
+    state.yshot = { all: all, y: y, file: null };
+    $('#yshot-title').textContent = y + '年のふりかえりの画像';
+    $('#yshot-places').checked = false;      // ★毎回外した状態から★ 前の選択を引き継がない
+    $('#yshot-money').checked = false;
+    $('#yshot').hidden = false;
+    await renderYearShot();
+  }
+
+  async function renderYearShot() {
+    const s = state.yshot;
+    if (!s) return;
+    const img = $('#yshot-img');
+    showBusy('画像を作っています');
+    try {
+      const file = await drawYearShot(s.all, s.y, {
+        places: $('#yshot-places').checked, money: $('#yshot-money').checked,
+      });
+      if (state.yshot !== s) return;          // 作っている間に閉じられた
+      s.file = file;
+      if (img.src.startsWith('blob:')) URL.revokeObjectURL(img.src);
+      img.src = URL.createObjectURL(file);
+      let canFiles = false;
+      try { canFiles = !!(navigator.canShare && navigator.share && navigator.canShare({ files: [file] })); } catch (e) { /* 共有できない */ }
+      $('#yshot-share').hidden = !canFiles;
+    } catch (e) {
+      toast('画像を作れませんでした: ' + e.message);
+    } finally {
+      hideBusy();
+    }
+  }
+
+  function closeYearShot() {
+    const img = $('#yshot-img');
+    if (img.src.startsWith('blob:')) URL.revokeObjectURL(img.src);
+    img.removeAttribute('src');
+    $('#yshot').hidden = true;
+    state.yshot = null;
+  }
+
+  function initYearShot() {
+    $('#yshot-close').addEventListener('click', closeYearShot);
+    $('#yshot-backdrop').addEventListener('click', closeYearShot);
+    $('#yshot-places').addEventListener('change', renderYearShot);
+    $('#yshot-money').addEventListener('change', renderYearShot);
+    // ★共有は押したその場で呼ぶ★ 画像は先に作ってあるので、待たずに渡せる
+    $('#yshot-share').addEventListener('click', () => {
+      const s = state.yshot;
+      if (!s || !s.file) return;
+      navigator.share({ files: [s.file], title: s.y + '年のふりかえり' }).catch((err) => {
+        if (err && err.name === 'AbortError') return;
+        saveFile(s.file);
+        toast('共有できなかったので、画像として保存しました');
+      });
+    });
+    $('#yshot-save').addEventListener('click', () => {
+      const s = state.yshot;
+      if (s && s.file) saveFile(s.file);
+    });
   }
 
   function renderStats(box, all) {
@@ -4570,6 +4928,8 @@
     pushBackGuard();
     window.addEventListener('popstate', () => {
       if (state.layersOpen) { openLayers(false); pushBackGuard(); return; }
+      const ys = $('#yshot');
+      if (ys && !ys.hidden) { closeYearShot(); pushBackGuard(); return; }
       const cdet = $('#collect-detail');
       if (cdet && !cdet.hidden) { closeCollection(); pushBackGuard(); return; }
       const sheet = $('#sheet');
@@ -7176,19 +7536,27 @@
     return { add: add, rename: rename, same: same, total: add.length + same };
   }
 
-  // onCheck(何枚目, 全部) … ZIPの中の写真を1枚ずつ確かめている間の進み具合
   // onProgress(何枚目, 全部) … 端末に入れている間の進み具合
-  async function importPhotoZip(file, plan, onProgress, onCheck) {
+  // ★大きく読んで、まとめて確定する★（v102）
+  // 前は「1枚ずつ見出しを読む（確かめています）」→「1枚ずつ確定する（読み込んでいます）」で、
+  // どちらもスマホでは1回ごとに待たされた。Zip.extract で近くの写真をまとめて読み、
+  // 読めたかたまり（20〜30枚）ごとに1回で確定する。
+  async function importPhotoZip(file, plan, onProgress) {
     for (const p of plan.rename) await Store.renamePhoto(p.id, p.name);
     if (!plan.add.length) return 0;
-    const list = await Zip.read(file, onCheck, plan.add.map((p) => p.ent));
-    const put = list.map((e, i) => {
-      const p = plan.add[i];
-      const rec = { id: p.id, blob: e.blob, size: e.blob.size, type: typeOf(p.file) };
-      if (p.name) rec.name = p.name;
-      return rec;
+    const byEnt = new Map(plan.add.map((p) => [p.ent, p]));
+    let n = 0;
+    await Zip.extract(file, plan.add.map((p) => p.ent), async (got) => {
+      const recs = got.map((g) => {
+        const p = byEnt.get(g.ent);
+        const rec = { id: p.id, blob: g.blob, size: g.blob.size, type: typeOf(p.file) };
+        if (p.name) rec.name = p.name;
+        return rec;
+      });
+      n += await Store.putPhotosBatch(recs);
+      if (onProgress) onProgress(n, plan.add.length);
     });
-    return await Store.putPhotosRaw(put, onProgress);
+    return n;
   }
 
   // ★時間のかかる処理は、動いていることを見せる★
@@ -7573,11 +7941,9 @@
           + '\n今ある写真は消えません。\n\n読み込みますか？');
         if (!ok) return;
         if (plan.rename.length) showBusy('写真の名前を合わせています');
-        else showBusy('写真を確かめています', 0, plan.add.length);
+        else showBusy('写真を読み込んでいます', 0, plan.add.length);
         const n = await importPhotoZip(f0, plan, (done, all) => {
           showBusy('写真を読み込んでいます', done, all);
-        }, (done, all) => {
-          showBusy('写真を確かめています', done, all);
         });
         showBusy('仕上げています');
         await renderPhotoSize();

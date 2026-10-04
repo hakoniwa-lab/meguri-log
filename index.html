@@ -705,7 +705,6 @@
         <li>配られているリストを増やす</li>
         <li>ご当地のリスト（もらった資料からの作成）</li>
         <li>知多四国霊場など、資料に座標が無くてまだ入れられていない霊場</li>
-        <li>1年のふりかえりを画像にして、そのまま人に見せられるようにする</li>
         <li>プール・レジャープール（出典のデータが荒く、ちゃんとした一覧にならなかったため見送り中）</li>
       </ul>
     </div>
@@ -728,6 +727,26 @@
 
 <!-- 写真1枚ごとの御朱印の情報。★境内の写真と御朱印が同じ扱いだった★
      1回の参拝で御朱印を2体いただくこともあるので、記録に1つでは足りない。 -->
+<!-- 1年のふりかえりを画像にする（v102）。人に見せる前提なので、場所の名前とお金は選んだときだけ入れる -->
+<div id="yshot" class="gsphoto yshot" hidden>
+  <div class="gsphoto__backdrop" id="yshot-backdrop"></div>
+  <div class="gsphoto__body">
+    <div class="sheet__head">
+      <h2 id="yshot-title">ふりかえりの画像</h2>
+      <button type="button" id="yshot-close" class="iconbtn" aria-label="閉じる">×</button>
+    </div>
+    <img id="yshot-img" alt="1年のふりかえりの画像">
+    <p class="muted">メモ・住所・写真そのもの・「出かけていない」記録は入りません。
+      下の2つは、チェックを付けたときだけ入ります。</p>
+    <label class="check"><input type="checkbox" id="yshot-places"> <span>よく行った場所の名前も入れる</span></label>
+    <label class="check"><input type="checkbox" id="yshot-money"> <span>使ったお金も入れる</span></label>
+    <div class="btns">
+      <button type="button" id="yshot-share" class="btn" hidden>共有する</button>
+      <button type="button" id="yshot-save" class="btn btn--sub">画像を保存</button>
+    </div>
+  </div>
+</div>
+
 <div id="gsphoto" class="gsphoto" hidden>
   <div class="gsphoto__backdrop" id="gsphoto-backdrop"></div>
   <div class="gsphoto__body">

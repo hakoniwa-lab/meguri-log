@@ -175,5 +175,61 @@ window.Zip = (function () {
     return out;
   }
 
-  return { write: write, read: read, list: list, crc32: crc32 };
+  // ★近くの写真をまとめて大きく読む★（v102）
+  // read() は写真1枚ごとに見出し（30バイト）を読みに行く。スマホ、特にGoogleドライブから
+  // 選んだファイルは1回ごとの読み込みに手間がかかり、枚数ぶん待たされた。
+  // 近くに並んでいる写真を1回で読み、その中から見出しと中身を切り出す。
+  // ents … list() の結果（から選んだもの）。onChunk([{ ent, blob }]) をかたまりごとに待つ
+  // （呼ぶ側はそこで保存する。全部読んでから保存すると写真が全部メモリに残る）。
+  const CHUNK = 8 * 1024 * 1024;   // 1回に読む大きさの上限
+  const SLACK = 4096;              // 見出しの名前・付加情報の分（目次の長さと違うことがある）
+  const GAP = 4 * 1024 * 1024;     // 読まない写真がこれより長く続いたら、かたまりを分ける（読みすぎより回数の方が重い）
+
+  async function one(blob, e) {
+    const lh = new Uint8Array(await blob.slice(e.lho, e.lho + 30).arrayBuffer());
+    if (get32(lh, 0) !== 0x04034B50) throw new Error('ZIPの中身が読めませんでした（' + e.name + '）');
+    const off = e.lho + 30 + get16(lh, 26) + get16(lh, 28);
+    return blob.slice(off, off + e.size);
+  }
+
+  async function extract(blob, ents, onChunk) {
+    const sorted = ents.slice().sort((a, b) => a.lho - b.lho);
+    let i = 0;
+    while (i < sorted.length) {
+      const first = sorted[i];
+      // 1つで大きいもの（動画など）は、見出しだけ読んで中身は参照のまま渡す
+      if (first.size + SLACK > CHUNK) {
+        await onChunk([{ ent: first, blob: await one(blob, first) }]);
+        i++;
+        continue;
+      }
+      let j = i, end = first.lho;
+      while (j < sorted.length) {
+        const e = sorted[j];
+        const eEnd = e.lho + 30 + SLACK + e.size;
+        if (j > i && (e.size + SLACK > CHUNK || eEnd - first.lho > CHUNK || e.lho - end > GAP)) break;
+        end = Math.max(end, eEnd);
+        j++;
+      }
+      const start = first.lho;
+      const buf = new Uint8Array(await blob.slice(start, Math.min(end, blob.size)).arrayBuffer());
+      const out = [];
+      for (let k = i; k < j; k++) {
+        const e = sorted[k];
+        const p = e.lho - start;
+        let got = null;
+        if (p + 30 <= buf.length && get32(buf, p) === 0x04034B50) {
+          const off = p + 30 + get16(buf, p + 26) + get16(buf, p + 28);
+          // ★切り出しは写しを作る★ 元のかたまりを手放せるように
+          if (off + e.size <= buf.length) got = new Blob([buf.subarray(off, off + e.size)]);
+        }
+        // 見出しが思ったより長く、かたまりからはみ出したものは1つずつ読む
+        out.push({ ent: e, blob: got || await one(blob, e) });
+      }
+      await onChunk(out);
+      i = j;
+    }
+  }
+
+  return { write: write, read: read, list: list, extract: extract, crc32: crc32 };
 })();

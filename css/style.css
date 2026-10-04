@@ -950,6 +950,9 @@ a{color:var(--navy)}
   background:var(--bg); border-radius:10px; margin:8px 0;
 }
 .gsphoto__is{font-weight:700}
+/* ふりかえりの画像は縦長なので、見本を大きめに出して中で送れるようにする */
+.yshot .gsphoto__body>img{max-height:58vh; background:#fff; border:1px solid var(--line)}
+.yshotbtn{margin:0 12px 10px}
 @media (min-width:640px){
   .gsphoto{align-items:center; justify-content:center}
   .gsphoto__body{max-width:520px; border-radius:18px}

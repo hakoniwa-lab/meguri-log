@@ -244,6 +244,22 @@ const Store = (() => {
 
     // ZIPから戻した写真を書き戻す。★元のidのまま入れる★
     // 記録が photoIds で id を指しているので、id が変わると結びつきが切れる。
+    // ★まとめて1回で確定する★（v102）
+    // putPhotosRaw は1枚ごとに確定していて、スマホでは確定が遅いので枚数ぶん待たされた。
+    // 呼ぶ側で20〜30枚ずつに分けて渡す（一度に全部渡すと、確定まで写真が全部メモリに残る）。
+    async putPhotosBatch(list) {
+      if (!list.length) return 0;
+      const t = tx(['photos'], 'readwrite');
+      const st = t.objectStore('photos');
+      for (const it of list) st.put(it);
+      await new Promise((res, rej) => {
+        t.oncomplete = res;
+        t.onerror = () => rej(t.error);
+        t.onabort = () => rej(t.error || new Error('保存が取り消されました（空き容量を確かめてください）'));
+      });
+      return list.length;
+    },
+
     async putPhotosRaw(list, onProgress) {
       let n = 0;
       for (const it of list) {
