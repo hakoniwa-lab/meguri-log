@@ -343,6 +343,13 @@
           記録と結び直すので、フォルダの名前を変えても大丈夫です（写真のファイル名の「__」から後ろは消さないでください）。</p>
       </details>
       <details class="qa">
+        <summary>パソコンで保存した写真のファイルが、スマホで灰色になって選べない</summary>
+        <p>v100で直しました。アプリを開き直して「新しい版があります」→「入れ直す」を押してから、もう一度選んでください。</p>
+        <p class="muted">Windowsのパソコンは、ZIPの種類を別の名前で付けます。パソコンからGoogleドライブに上げると
+          その名前のまま残り、Androidの選ぶ画面はその名前で選べるかを決めるため、前の版では灰色になっていました。
+          直す前の版で急ぐときは、Googleドライブのアプリでファイルを「ダウンロード」してから、ダウンロードの中から選ぶと読めます。</p>
+      </details>
+      <details class="qa">
         <summary>町丁目の一覧に、行っていない町も出したい</summary>
         <p>記録タブの「町丁目」で、市区町村ごとの <b>「▼ ○○市の町を全部見る」</b> を押すと、
           その市区町村の町を全部並べます。行った町は色が付き、押すとその町を地図で見られます。
@@ -619,8 +626,11 @@
         <button id="btn-export" class="btn">記録を保存</button>
         <button id="btn-photos" class="btn btn--sub">写真を保存</button>
         <button id="btn-import" class="btn btn--sub">読み込み</button>
+        <!-- ★ZIPの種類名は1つではない★（v100）Windowsは application/x-zip-compressed と名付け、
+             パソコンからGoogleドライブに上げたZIPはその名前のまま保存される。Androidの選ぶ画面は
+             拡張子でなくこの名前で絞るので、application/zip だけだと灰色で選べなかった。 -->
         <input type="file" id="import-file"
-               accept="application/json,application/zip,text/plain,.json,.txt,.zip" hidden>
+               accept="application/json,application/zip,application/x-zip-compressed,application/x-zip,application/octet-stream,text/plain,.json,.txt,.zip" hidden>
       </div>
       <p id="photo-size" class="muted"></p>
       <p class="muted"><b>記録と写真は別のファイルです。</b>

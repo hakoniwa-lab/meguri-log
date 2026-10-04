@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v99';
+  const APP_VERSION = 'v100';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -7503,13 +7503,24 @@
       importRunning = true;
       try {
         // ★写真のZIPも同じ入口で受ける★ 入口を分けると片方だけ読んで終わる
-        if (/\.zip$/i.test(f0.name)) await importPhotoFlow(f0);
+        // ★ZIPかどうかは中身の先頭（PK）で見る★（v100）送り方によっては名前から .zip が落ちて届き、
+        // 記録のファイルとして読もうとして「JSONではありません」になる。
+        if (/\.zip$/i.test(f0.name) || await looksLikeZip(f0)) await importPhotoFlow(f0);
         else await importRecordFlow(f0);
       } finally {
         importRunning = false;
         e.target.value = '';
       }
     });
+
+    async function looksLikeZip(file) {
+      try {
+        const h = new Uint8Array(await file.slice(0, 4).arrayBuffer());
+        return h.length === 4 && h[0] === 0x50 && h[1] === 0x4B && h[2] === 0x03 && h[3] === 0x04;
+      } catch (_) {
+        return false;
+      }
+    }
 
     async function importPhotoFlow(f0) {
       // ★黙って読み込まない★ 何も出ないと「読めたのか」が分からない。
