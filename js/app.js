@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v102';
+  const APP_VERSION = 'v103';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -180,6 +180,8 @@
     nearHits: [],      // いま出ている分（地図に出すボタン用）
     lineDay: null,      // 表示する日（nullは全部）。既定は最新の日
     lineDayPicked: false,  // ユーザーが自分で日を選んだか
+    lineDays: [],       // 線か通った道がある日（新しい順）。‹ › とカレンダーで使う
+    ldcalMonth: '',     // カレンダーで見ている月（YYYY-MM）
     shareType: null,       // この端末の共有シートが受け付ける形式
     backupFile: null,      // 共有用に先に作っておくバックアップ
     backupBuilding: false,
@@ -249,6 +251,7 @@
     initViewer();
     initHistory();
     initYearShot();
+    initLineDays();
     initSettings();
     initCollect();
     initStations();
@@ -1457,42 +1460,115 @@
     return box;
   }
 
+  // ★日付を横に並べない★（v103）
+  // 本人「すべての日・10/01・09/30…が横に永遠と伸びていく。カレンダー方式にできないか」。
+  // 地図の上は「すべての日・‹・日付・›」の4つだけにし、日付を押すとカレンダーで選ぶ。
+  // ‹ › は記録のある日へ1日ずつ飛ぶ（記録の無い日は飛ばす）。
+  // days … 線か通った道がある日（新しい順）
   function buildLineDayChips(days) {
     const box = $('#line-days');
     if (!box) return;
-    const wanted = ['__all__'].concat(days.slice(0, 40));
-    const cur = box.dataset.days || '';
-    const key = wanted.join(',');
-    // ★出す・出さないは、作り直すかどうかとは別に必ず決める★
-    // 以前はここを「中身が変わったときだけ」書いていたため、線を一度消して
-    // もう一度出すと、日付は同じままなので早く帰ってしまい、
-    // チップが隠れたきり戻らなかった。
+    state.lineDays = days;
+    // ★出す・出さないは必ず毎回決める★（線を一度消して出し直すと隠れたきりになった v50 の再発防止）
     box.hidden = !(state.linesOn || state.trackLineOn) || !days.length;
-    if (cur === key) {                       // 中身が同じなら選択状態だけ更新
-      $$('#line-days .ldchip').forEach(function (b) {
-        b.classList.toggle('is-on', (b.dataset.day || '__all__') === (state.lineDay || '__all__'));
-      });
-      return;
-    }
-    box.dataset.days = key;
-    box.innerHTML = '';
-    if (!days.length) return;
+    const cur = state.lineDay;
+    $('#ld-all').classList.toggle('is-on', !cur);
+    const pick = $('#ld-pick');
+    pick.classList.toggle('is-on', !!cur);
+    pick.textContent = '📅 ' + (cur ? dayLabelJa(cur) : '日付を選ぶ');
+    // days は新しい順。‹ は古い方、› は新しい方
+    const i = cur ? days.indexOf(cur) : -1;
+    $('#ld-prev').disabled = cur ? (i < 0 || i >= days.length - 1) : !days.length;
+    $('#ld-next').disabled = !cur || i <= 0;
+  }
 
-    wanted.forEach(function (d) {
-      const isAll = d === '__all__';
+  // 「10月1日（水）」。今年でなければ年も付ける
+  function dayLabelJa(d) {
+    const p = d.split('-').map(Number);
+    const dt = new Date(p[0], p[1] - 1, p[2]);
+    const wd = '日月火水木金土'.charAt(dt.getDay());
+    return (p[0] !== new Date().getFullYear() ? p[0] + '年' : '') + p[1] + '月' + p[2] + '日（' + wd + '）';
+  }
+
+  function pickLineDay(d) {
+    state.lineDay = d;
+    state.lineDayPicked = true;
+    renderDayLines();
+  }
+
+  function initLineDays() {
+    $('#ld-all').addEventListener('click', () => pickLineDay(null));
+    $('#ld-prev').addEventListener('click', () => {
+      const days = state.lineDays || [];
+      if (!state.lineDay) { if (days.length) pickLineDay(days[0]); return; }   // すべて → いちばん新しい日
+      const i = days.indexOf(state.lineDay);
+      if (i >= 0 && i < days.length - 1) pickLineDay(days[i + 1]);
+    });
+    $('#ld-next').addEventListener('click', () => {
+      const days = state.lineDays || [];
+      const i = days.indexOf(state.lineDay);
+      if (i > 0) pickLineDay(days[i - 1]);
+    });
+    $('#ld-pick').addEventListener('click', () => {
+      const days = state.lineDays || [];
+      const d = state.lineDay || days[0] || todayLocal();
+      state.ldcalMonth = d.slice(0, 7);
+      renderLineCal();
+      $('#ldcal').hidden = false;
+    });
+    $('#ldcal-close').addEventListener('click', closeLineCal);
+    $('#ldcal-backdrop').addEventListener('click', closeLineCal);
+    $('#ldcal-all').addEventListener('click', () => { closeLineCal(); pickLineDay(null); });
+    // ★月の矢印は、記録のある月へ飛ぶ★ 何か月も空いていると押し続けることになるため
+    const months = () => Array.from(new Set((state.lineDays || []).map((d) => d.slice(0, 7)))).sort();
+    $('#ldcal-prev').addEventListener('click', () => {
+      const m = months().filter((x) => x < state.ldcalMonth).pop();
+      if (m) { state.ldcalMonth = m; renderLineCal(); }
+    });
+    $('#ldcal-next').addEventListener('click', () => {
+      const m = months().find((x) => x > state.ldcalMonth);
+      if (m) { state.ldcalMonth = m; renderLineCal(); }
+    });
+  }
+
+  function closeLineCal() {
+    $('#ldcal').hidden = true;
+  }
+
+  function renderLineCal() {
+    const ym = state.ldcalMonth;
+    const y = Number(ym.slice(0, 4)), m = Number(ym.slice(5, 7));
+    const has = new Set(state.lineDays || []);
+    const months = Array.from(new Set((state.lineDays || []).map((d) => d.slice(0, 7))));
+    $('#ldcal-month').textContent = y + '年' + m + '月';
+    $('#ldcal-prev').disabled = !months.some((x) => x < ym);
+    $('#ldcal-next').disabled = !months.some((x) => x > ym);
+    const grid = $('#ldcal-grid');
+    grid.innerHTML = '';
+    '日月火水木金土'.split('').forEach((w, i) => {
+      const h = document.createElement('span');
+      h.className = 'ldcal__wd' + (i === 0 ? ' is-sun' : i === 6 ? ' is-sat' : '');
+      h.textContent = w;
+      grid.appendChild(h);
+    });
+    const first = new Date(y, m - 1, 1).getDay();
+    for (let i = 0; i < first; i++) grid.appendChild(document.createElement('span'));
+    const last = new Date(y, m, 0).getDate();
+    const today = todayLocal();
+    for (let d = 1; d <= last; d++) {
+      const ds = ym + '-' + String(d).padStart(2, '0');
       const b = document.createElement('button');
       b.type = 'button';
-      b.className = 'ldchip';
-      if (!isAll) b.dataset.day = d;
-      b.textContent = isAll ? 'すべての日' : d.slice(5).replace('-', '/');
-      b.classList.toggle('is-on', (isAll ? '__all__' : d) === (state.lineDay || '__all__'));
-      b.addEventListener('click', function () {
-        state.lineDay = isAll ? null : d;
-        state.lineDayPicked = true;
-        renderDayLines();
-      });
-      box.appendChild(b);
-    });
+      b.className = 'ldcal__day' + (has.has(ds) ? ' has' : '')
+        + (ds === state.lineDay ? ' is-on' : '') + (ds === today ? ' is-today' : '');
+      b.textContent = String(d);
+      if (has.has(ds)) {
+        b.addEventListener('click', () => { closeLineCal(); pickLineDay(ds); });
+      } else {
+        b.disabled = true;
+      }
+      grid.appendChild(b);
+    }
   }
 
   // ★日付は必ずローカルで作る★
@@ -2848,9 +2924,11 @@
   }
 
   // ★長さはブラウザから止められない★
-  // 撮影画面に「30秒で止める」を頼む手段が無い。撮ったあとに長さを見て断るしかない。
-  const VIDEO_SEC = 30;
-  const VIDEO_MB = 100;
+  // 撮影画面に「2分で止める」を頼む手段が無い。撮ったあとに長さを見て断るしかない。
+  // ★v103で30秒→2分・100MB→300MB★（本人の要望）。縮めずにそのまま入れるので、フルHDで2分≒250〜300MB。
+  // 4Kは2分で700MB超になり入らない。書き出しは Zip.write が8MBずつ読むのでメモリに丸ごと載せない。
+  const VIDEO_SEC = 120;
+  const VIDEO_MB = 300;
 
   function videoDuration(file) {
     return new Promise((res) => {
@@ -4930,6 +5008,8 @@
       if (state.layersOpen) { openLayers(false); pushBackGuard(); return; }
       const ys = $('#yshot');
       if (ys && !ys.hidden) { closeYearShot(); pushBackGuard(); return; }
+      const lc = $('#ldcal');
+      if (lc && !lc.hidden) { closeLineCal(); pushBackGuard(); return; }
       const cdet = $('#collect-detail');
       if (cdet && !cdet.hidden) { closeCollection(); pushBackGuard(); return; }
       const sheet = $('#sheet');

@@ -30,10 +30,24 @@ window.Zip = (function () {
     return TABLE;
   }
 
-  function crc32(u8) {
+  function crcUpdate(c, u8) {
     const t = crcTable();
-    let c = 0xFFFFFFFF;
     for (let i = 0; i < u8.length; i++) c = t[(c ^ u8[i]) & 0xFF] ^ (c >>> 8);
+    return c;
+  }
+
+  function crc32(u8) {
+    return (crcUpdate(0xFFFFFFFF, u8) ^ 0xFFFFFFFF) >>> 0;
+  }
+
+  // ★大きいものは少しずつ読んで数える★（v103）
+  // 動画を2分（300MB）まで入れられるようにしたので、1本まるごとメモリに読むとスマホのブラウザが落ちる。
+  const CRC_STEP = 8 * 1024 * 1024;
+  async function crcOfBlob(blob) {
+    let c = 0xFFFFFFFF;
+    for (let off = 0; off < blob.size; off += CRC_STEP) {
+      c = crcUpdate(c, new Uint8Array(await blob.slice(off, off + CRC_STEP).arrayBuffer()));
+    }
     return (c ^ 0xFFFFFFFF) >>> 0;
   }
 
@@ -78,9 +92,10 @@ window.Zip = (function () {
     for (let i = 0; i < files.length; i++) {
       const f = files[i];
       const nameBytes = ENC.encode(f.name);
-      const buf = new Uint8Array(await f.blob.arrayBuffer());
-      const crc = crc32(buf);
-      const size = buf.length;
+      // ★中身は読み込まずに参照で置く★ 数えるときだけ少しずつ読む。
+      // 前は1枚ずつ丸ごと読んで並べていたので、写真全部（数百MB）がメモリに残っていた
+      const crc = await crcOfBlob(f.blob);
+      const size = f.blob.size;
       total += size;
       if (total > MAX_TOTAL) throw new Error('写真の合計が大きすぎます（3.5GBまで）');
 
@@ -93,7 +108,7 @@ window.Zip = (function () {
       put32(lh, 14, crc); put32(lh, 18, size); put32(lh, 22, size);
       put16(lh, 26, nameBytes.length); put16(lh, 28, 0);
       lh.set(nameBytes, 30);
-      parts.push(lh, buf);
+      parts.push(lh, f.blob);
 
       const ch = u8of(46 + nameBytes.length);
       put32(ch, 0, 0x02014B50);

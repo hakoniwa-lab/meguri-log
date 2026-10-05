@@ -57,8 +57,14 @@
     </div>
     <!-- ランドマークを出しているときだけ、種類の絞り込みを出す -->
     <div class="mkinds" id="mark-kinds" hidden></div>
-    <!-- 移動の線は何日分も重なると読めないので、日ごとに切り替える -->
-    <div class="mkinds ldays" id="line-days" hidden></div>
+    <!-- 移動の線は何日分も重なると読めないので、日ごとに切り替える。
+         ★日付を横に並べない★（v103）日が増えるほど横に伸び続けたので、前後の矢印とカレンダーにした -->
+    <div class="ldays" id="line-days" hidden>
+      <button type="button" class="ldchip" id="ld-all">すべての日</button>
+      <button type="button" class="ldarrow" id="ld-prev" aria-label="前の日">‹</button>
+      <button type="button" class="ldchip ldpick" id="ld-pick">📅 日付を選ぶ</button>
+      <button type="button" class="ldarrow" id="ld-next" aria-label="次の日">›</button>
+    </div>
     <!-- ボタンは地図の枠に対して固定する。パネル基準にすると、下の説明文が
          2行に折り返した端末でボタンが地図からはみ出し、地図の帰属表示に重なる。 -->
     <!-- 場所を名前で探して地図を飛ばす。手元にあるデータ（自分の記録と
@@ -394,12 +400,12 @@
       </details>
       <details class="qa">
         <summary>動画も残せますか</summary>
-        <p>残せます。記録画面の<b>「動画（30秒まで）」</b>から。写真と同じ扱いで、
+        <p>残せます。記録画面の<b>「動画（2分まで）」</b>から。写真と同じ扱いで、
           記録カードにも見返す画面にも出ます。バックアップは<b>「写真を保存」</b>に一緒に入ります。</p>
-        <p class="muted">★30秒を超えると入りません★ 撮影画面に時間の制限をかける手段が
+        <p class="muted">★2分を超えると入りません★ 撮影画面に時間の制限をかける手段が
           Webにはないため、撮ったあとに長さを見て断る形になっています。
-          100MBを超えるものも入りません。<b>動画は写真の50〜100倍の大きさ</b>です
-          （30秒で15〜30MB、写真は1枚0.3MB）ので、入れすぎるとバックアップが重くなります。</p>
+          300MBを超えるものも入りません。<b>動画は縮めずにそのまま入るので、とても大きくなります</b>
+          （フルHDで2分250〜300MB、写真は1枚0.3MB）。撮るときはカメラの設定をフルHD（1080p）にしてください。4Kだと2分で700MBを超えて入りません。入れすぎるとスマホの空きとバックアップが重くなります。</p>
       </details>
       <details class="qa">
         <summary>閉館した場所や、行けなくなった場所をリストから外したい</summary>
@@ -727,6 +733,27 @@
 
 <!-- 写真1枚ごとの御朱印の情報。★境内の写真と御朱印が同じ扱いだった★
      1回の参拝で御朱印を2体いただくこともあるので、記録に1つでは足りない。 -->
+<!-- 移動の線・通った道の日付を選ぶカレンダー（v103） -->
+<div id="ldcal" class="gsphoto ldcal" hidden>
+  <div class="gsphoto__backdrop" id="ldcal-backdrop"></div>
+  <div class="gsphoto__body">
+    <div class="sheet__head">
+      <h2>日付を選ぶ</h2>
+      <button type="button" id="ldcal-close" class="iconbtn" aria-label="閉じる">×</button>
+    </div>
+    <div class="ldcal__nav">
+      <button type="button" class="ldarrow" id="ldcal-prev" aria-label="前の月">‹</button>
+      <b id="ldcal-month"></b>
+      <button type="button" class="ldarrow" id="ldcal-next" aria-label="次の月">›</button>
+    </div>
+    <div class="ldcal__grid" id="ldcal-grid"></div>
+    <p class="muted">色の付いた日に、移動の線か通った道があります。月の矢印は、記録のある月へ飛びます。</p>
+    <div class="btns">
+      <button type="button" id="ldcal-all" class="btn btn--sub">すべての日を出す</button>
+    </div>
+  </div>
+</div>
+
 <!-- 1年のふりかえりを画像にする（v102）。人に見せる前提なので、場所の名前とお金は選んだときだけ入れる -->
 <div id="yshot" class="gsphoto yshot" hidden>
   <div class="gsphoto__backdrop" id="yshot-backdrop"></div>
@@ -919,7 +946,7 @@
         <button type="button" id="btn-camera" class="btn btn--sub">カメラで撮る</button>
         <button type="button" id="btn-library" class="btn btn--sub">写真から選ぶ</button>
         <button type="button" id="btn-files" class="btn btn--sub">クラウド・ファイルから</button>
-        <button type="button" id="btn-video" class="btn btn--sub">動画（30秒まで）</button>
+        <button type="button" id="btn-video" class="btn btn--sub">動画（2分まで）</button>
         <button type="button" id="btn-gspick" class="btn btn--sub btn--slim">まとめて印を付ける</button>
       </div>
       <input type="file" id="photo-camera" accept="image/*" capture="environment" hidden>
