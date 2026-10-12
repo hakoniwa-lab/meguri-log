@@ -679,7 +679,7 @@
       <div class="picktags" id="pick-tags"></div>
       <div class="pickopts">
         <label><input type="checkbox" id="pick-photo"> 写真も入れる</label>
-        <label><input type="checkbox" id="pick-memo"> メモも入れる</label>
+        <label><input type="checkbox" id="pick-memo"> メモ・一緒に行った人の名前も入れる</label>
         <label><input type="checkbox" id="pick-money"> 金額・評価も入れる</label>
       </div>
       <p class="pickcount" id="pick-count">タグを選んでください。</p>
@@ -851,6 +851,14 @@
     <div class="field">
       <span>何で行った？（任意）</span>
       <div class="tags" id="tag-picker"></div>
+    </div>
+
+    <!-- 誰と行ったか（v104）。いくつでも選べる（「ひとり」だけは他と一緒に選べない） -->
+    <div class="field">
+      <span>誰と行った？（任意・いくつでも）</span>
+      <div class="days" id="with-picker"></div>
+      <input type="text" id="visit-with-names" maxlength="60"
+             placeholder="名前を残したいとき（例: 母と妹、〇〇さん）">
     </div>
 
     <div class="field">

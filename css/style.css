@@ -121,7 +121,7 @@ a{color:var(--navy)}
 .sheet__sub{margin:18px 0 8px; font-size:13px; color:var(--muted); border-top:1px solid var(--line); padding-top:12px}
 .field{display:block; margin:12px 0}
 .field>span{display:block; font-size:12.5px; font-weight:700; color:var(--muted); margin-bottom:4px}
-.field input[type=date],.field textarea,.field input[type=file]{
+.field input[type=date],.field textarea,.field input[type=file],.field input[type=text]{
   width:100%; border:1px solid var(--line); border-radius:10px; padding:10px 12px;
   font:inherit; font-size:16px; background:#fff; color:var(--ink);
 }
@@ -423,6 +423,9 @@ a{color:var(--navy)}
 }
 .day--wide{width:auto; padding:0 12px}
 .day.is-on{border-color:var(--danger); background:var(--danger); color:#fff}
+/* 誰と行ったか（v104）。御朱印の赤と見分けるため紺にする */
+#with-picker .day.is-on{border-color:var(--navy); background:var(--navy)}
+#with-picker{margin-bottom:6px}
 
 
 /* ---- 記録カードの追加情報 ---- */

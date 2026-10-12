@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v103';
+  const APP_VERSION = 'v104';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -77,6 +77,29 @@
     { key: 'home',  mark: '🏠', label: '個人宅' },
     { key: 'other', mark: '✳️', label: 'その他' },
   ];
+
+  // ★誰と行ったか★（v104）本人「誰と行ったか、家族・ひとり・友達・仲間で行ったかも残したい」。
+  // 記録には key の配列（visit.withWho）と、名前のメモ（visit.withNames）で持つ。
+  // ★key は付け替えない★（タグと同じ。表示の文字は変えてよい）
+  // 「ひとり」と他は同時に選べない。他どうしは何個でも選べる（家族と友だちで、など）。
+  const WITH_WHO = [
+    { key: 'solo',    mark: '🚶', label: 'ひとり' },
+    { key: 'family',  mark: '👪', label: '家族' },
+    { key: 'friend',  mark: '🧑‍🤝‍🧑', label: '友だち' },
+    { key: 'mates',   mark: '👥', label: '仲間' },
+    { key: 'partner', mark: '💑', label: '恋人・夫婦' },
+    { key: 'coworker', mark: '💼', label: '仕事の人' },
+  ];
+  function withWhoOf(v) {
+    const keys = Array.isArray(v && v.withWho) ? v.withWho : [];
+    return WITH_WHO.filter((w) => keys.includes(w.key));
+  }
+  // 「家族・友だち（母と妹）」の形。何も無ければ ''
+  function withLabel(v, withNames) {
+    const ws = withWhoOf(v).map((w) => w.label).join('・');
+    const nm = withNames === false ? '' : ((v && v.withNames) || '').trim();
+    return ws + (nm ? (ws ? '（' + nm + '）' : nm) : '');
+  }
   // ★key は保存済みの記録が参照している。絶対に付け替えない★
   // v35 で公園を足すとき 'park' を使い回しかけたが、それをすると駐車場として
   // 保存済みの記録が公園に化ける。公園は 'garden' にした。
@@ -1741,6 +1764,9 @@
       const bits = [];
       if (Number(item.amount) > 0) bits.push('¥' + Number(item.amount).toLocaleString('ja-JP'));
       if (item.goshuin && item.goshuin.name) bits.push(gsKindOf(item.goshuin) + ': ' + item.goshuin.name);
+      // 誰と（名前は出さない。地図の画面は人に見せることがあるため）
+      const ww = withWhoOf(item);
+      if (ww.length) bits.push(ww[0].key === 'solo' ? 'ひとりで' : withLabel(item, false) + 'と');
       if (bits.length) {
         const meta = document.createElement('span');
         meta.className = 'pinpop__meta';
@@ -2358,6 +2384,7 @@
 
     row('訪れた日', (v.visitedAt || '') + (v.visitedTime ? ' ' + v.visitedTime : ''));
     if (t.key) row('タグ', t.mark + ' ' + t.label);
+    if (withLabel(v)) row('誰と', withLabel(v));
     if (Number(v.amount) > 0) row('使った金額', '¥' + Number(v.amount).toLocaleString('ja-JP'));
     if (v.rating) row('評価', '★'.repeat(v.rating) + '☆'.repeat(5 - v.rating));
     if (v.revisit) row('', 'また行きたい');
@@ -2883,6 +2910,7 @@
     $('#visit-time').value = visit.visitedTime || '';
     $('#visit-memo').value = visit.memo || '';
     setTagValue(visit.tag || '');
+    setWithValue(visit.withWho, visit.withNames);
     $('#visit-amount').value = (visit.amount || visit.amount === 0) ? visit.amount : '';
     $('#visit-revisit').checked = !!visit.revisit;
     $('#visit-athome').checked = !!visit.athome;
@@ -3024,6 +3052,40 @@
   function getTagValue() {
     const on = $('#tag-picker .tagbtn.is-active');
     return on ? on.dataset.tag : '';
+  }
+
+  // 誰と行ったか（v104）
+  function initWithPicker() {
+    const box = $('#with-picker');
+    if (!box || box.childElementCount) return;
+    for (const w of WITH_WHO) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'day day--wide';
+      b.dataset.v = w.key;
+      b.textContent = w.mark + ' ' + w.label;
+      b.addEventListener('click', () => {
+        const on = !b.classList.contains('is-on');
+        b.classList.toggle('is-on', on);
+        if (!on) return;
+        // 「ひとり」と他は一緒に選べない
+        $$('#with-picker .day').forEach((x) => {
+          if (x === b) return;
+          if (w.key === 'solo' || x.dataset.v === 'solo') x.classList.remove('is-on');
+        });
+      });
+      box.appendChild(b);
+    }
+  }
+
+  function setWithValue(keys, names) {
+    const k = Array.isArray(keys) ? keys : [];
+    $$('#with-picker .day').forEach((b) => b.classList.toggle('is-on', k.includes(b.dataset.v)));
+    $('#visit-with-names').value = names || '';
+  }
+
+  function getWithWho() {
+    return $$('#with-picker .day.is-on').map((b) => b.dataset.v);
   }
 
   // ---- 追加した入力欄の読み書き ----
@@ -3263,6 +3325,7 @@
 
   function clearExtraFields() {
     $('#visit-amount').value = '';
+    setWithValue([], '');
     $('#visit-revisit').checked = false;
     $('#visit-athome').checked = false;
     setRating(0);
@@ -3274,6 +3337,7 @@
 
   function initSheet() {
     initTagPicker();
+    initWithPicker();
     initExtraFields();
     $('#sheet-close').addEventListener('click', closeSheet);
     const mvb = $('#sheet-movepin');
@@ -3389,6 +3453,8 @@
           visitedTime: $('#visit-time').value || '',
           memo: $('#visit-memo').value.trim(),
           tag: getTagValue(),
+          withWho: getWithWho(),
+          withNames: $('#visit-with-names').value.trim(),
           amount: amountValue(),
           rating: getRating(),
           revisit: $('#visit-revisit').checked,
@@ -3411,6 +3477,8 @@
           visitedTime: $('#visit-time').value || '',
           memo: $('#visit-memo').value.trim(),
           tag: getTagValue(),
+          withWho: getWithWho(),
+          withNames: $('#visit-with-names').value.trim(),
           amount: amountValue(),
           rating: getRating(),
           revisit: $('#visit-revisit').checked,
@@ -3679,7 +3747,7 @@
     let visits = all.filter(function (v) {
       if (photoOnly && !(v.photoIds && v.photoIds.length)) return false;
       if (!q) return true;
-      const hay = [v.name, v.memo, v.address && v.address.lv01Nm, v.visitedAt,
+      const hay = [v.name, v.memo, withLabel(v), v.address && v.address.lv01Nm, v.visitedAt,
                    v.place && v.place.name, v.place && v.place.address,
                    v.goshuin && v.goshuin.name]
         .filter(Boolean).join(' ');
@@ -3818,6 +3886,12 @@
       a.className = 'badge';
       a.textContent = '¥' + Number(v.amount).toLocaleString('ja-JP');
       badges.appendChild(a);
+    }
+    if (withWhoOf(v).length) {
+      const wb = document.createElement('span');
+      wb.className = 'badge';
+      wb.textContent = withWhoOf(v).map((w) => w.mark + ' ' + w.label).join('・');
+      badges.appendChild(wb);
     }
     if (v.revisit) {
       const rv = document.createElement('span');
@@ -4371,6 +4445,9 @@
     }
     const tags = new Map();
     for (const v of out) tags.set(v.tag || '', (tags.get(v.tag || '') || 0) + 1);
+    // 誰と行ったか（v104）。名前は数えない（人に見せる画像にも使うため）
+    const withCount = new Map();
+    for (const v of out) for (const w of withWhoOf(v)) withCount.set(w.key, (withCount.get(w.key) || 0) + 1);
     let goshuin = 0;
     mine.forEach((v) => { goshuin += goshuinOf(v).length; });
     const spent = mine.reduce((n, v) => n + (Number(v.amount) || 0), 0);
@@ -4380,7 +4457,8 @@
       days: new Set(out.map((v) => v.visitedAt)).size,
       names: names, prefs: prefs, newPref: newPref, cities: cities, newCity: newCity,
       photos: mine.reduce((n, v) => n + (v.photoIds || []).length, 0),
-      months: months, tags: tags, goshuin: goshuin, spent: spent, spentHome: spentHome,
+      months: months, tags: tags, withCount: withCount,
+      goshuin: goshuin, spent: spent, spentHome: spentHome,
     };
   }
 
@@ -4478,6 +4556,11 @@
       .sort((a, b) => tags.get(b.key) - tags.get(a.key))
       .slice(0, 8)
       .map((t) => [t.mark + ' ' + t.label, tags.get(t.key) + ' 件']));
+
+    // 誰と行ったか（v104・出かけた記録だけ）
+    card('誰と行ったか', WITH_WHO.filter((w) => st.withCount.get(w.key))
+      .sort((a, b) => st.withCount.get(b.key) - st.withCount.get(a.key))
+      .map((w) => [w.mark + ' ' + w.label, st.withCount.get(w.key) + ' 回']));
 
     // よく行った場所
     const byName = new Map();
@@ -4700,6 +4783,26 @@
         ctx.font = font(32, true);
         ctx.textAlign = 'right';
         ctx.fillText(st.tags.get(t.key) + ' 件', tx + cw / 2 - 40, ty);
+        ctx.textAlign = 'left';
+      });
+      cy += rows * rowH + 24 + 20;
+    }
+
+    // 誰と行ったか（v104・回数だけ。名前は入れない）
+    const withRows = WITH_WHO.filter((w) => st.withCount.get(w.key))
+      .sort((a, b) => st.withCount.get(b.key) - st.withCount.get(a.key));
+    if (withRows.length) {
+      title('誰と行ったか');
+      const rows = Math.ceil(withRows.length / 2), rowH = 60;
+      card(cy - 8, rows * rowH + 24);
+      withRows.forEach((w, i) => {
+        const tx = pad + (i % 2) * (cw / 2), ty = cy + 44 + Math.floor(i / 2) * rowH;
+        ctx.fillStyle = YS_COL.ink;
+        ctx.font = font(32, false);
+        ctx.fillText(ysFit(ctx, w.mark + ' ' + w.label, cw / 2 - 150), tx, ty);
+        ctx.font = font(32, true);
+        ctx.textAlign = 'right';
+        ctx.fillText(st.withCount.get(w.key) + ' 回', tx + cw / 2 - 40, ty);
         ctx.textAlign = 'left';
       });
       cy += rows * rowH + 24 + 20;
@@ -7676,7 +7779,7 @@
   // 渡してから気づいても取り返せないので、外し忘れではなく入れ忘れが起きる側に倒す。
   function trimForShare(v, opt) {
     const out = Object.assign({}, v);
-    if (!opt.memo) out.memo = '';
+    if (!opt.memo) { out.memo = ''; out.withNames = ''; }   // 一緒に行った人の名前もメモと同じ扱い（v104）
     if (!opt.money) { delete out.amount; delete out.rating; delete out.revisit; }
     // 写真を入れないときは参照も消す。残すと、渡した先で開けない写真の枠だけが出る
     if (!opt.photo) out.photoIds = [];
