@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v104';
+  const APP_VERSION = 'v105';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -7540,10 +7540,19 @@
     const n = visits.reduce((a, v) => a + (v.photoIds || []).length, 0);
     if (!n) { el.textContent = '写真はまだありません。'; return; }
     const photos = await Store.photosOf(visits);
-    let bytes = 0;
-    for (const p of photos) bytes += (p.size || (p.blob && p.blob.size) || 0);
-    el.textContent = '写真 ' + photos.length + ' 枚・およそ '
-      + (bytes / 1048576).toFixed(1) + 'MB（ZIPにしてもほぼ同じ大きさです）';
+    // 写真と動画は別のファイルに書き出すので、量も分けて出す（v105）
+    let pb = 0, vb = 0, vn = 0;
+    for (const p of photos) {
+      const s = p.size || (p.blob && p.blob.size) || 0;
+      if (isVideoRec(p)) { vb += s; vn++; } else pb += s;
+    }
+    const mb = (b) => b >= 1073741824 ? (b / 1073741824).toFixed(2) + 'GB' : (b / 1048576).toFixed(1) + 'MB';
+    el.textContent = '写真 ' + (photos.length - vn) + ' 枚・およそ ' + mb(pb)
+      + (vn ? '／動画 ' + vn + ' 本・およそ ' + mb(vb) : '')
+      + '。ZIPにしてもほぼ同じ大きさです'
+      + (vb > VIDEO_PART_BYTES ? '（動画は ' + Math.ceil(vb / VIDEO_PART_BYTES) + ' つ前後のファイルに分かれます）' : '') + '。';
+    const vbtn = $('#btn-videos');
+    if (vbtn) vbtn.hidden = !vn;          // 動画が無ければ出さない
   }
 
   async function saveBackupFile(file, counts) {
@@ -7581,21 +7590,64 @@
   }
 
   // 写真だけのZIP。無圧縮なので中身はそのままのJPEG（パソコンでも開ける）。
-  async function buildPhotoZip(onProgress) {
+  // ★写真と動画を別のファイルにする★（v105）
+  // 本人「動画を入れたバックアップ（1.25GB・動画14本で1.1GB）をスマホで読み込むと途中で止まる。
+  // 写真と動画で分けられないか」。写真は「写真を保存」、動画は「動画を保存」。
+  // 動画は1ファイル500MBまでに分ける（1つのファイルが大きいと、受け取りにも読み込みにも時間がかかる）。
+  // 読み込みはどれも同じ「読み込み」から。この端末に無い分だけ入るので、何回に分けて入れてもよい。
+  const isVideoRec = (p) => String(p.type || '').indexOf('video/') === 0;
+  const VIDEO_PART_BYTES = 500 * 1048576;
+
+  async function buildMediaZips(kind, onProgress) {
     const visits = await Store.getAllVisits();
-    const photos = await Store.photosOf(visits);
-    if (!photos.length) return null;
+    const items = (await Store.photosOf(visits)).filter((p) => (kind === 'video') === isVideoRec(p));
+    if (!items.length) return [];
     const dirOf = photoFolders(visits);
-    const files = photos.map((p) => ({
+    const fileOf = (p) => ({
       // ★名前の後ろに必ず id を付ける★
       // 戻すときは id で記録と結び直すので、id を落とすと写真が迷子になる。
       // 「名前__id.jpg」の形にして、人が見て分かる名前を前に出す。
       // ★フォルダは見やすくするためだけのもの★ 読み戻すときは見ない（名前と id だけで戻る）。
       name: (dirOf.get(p.id) ? dirOf.get(p.id) + '/' : '') + photoFileNameOf(p),
       blob: p.blob,
-    }));
-    const blob = await Zip.write(files, onProgress);
-    return { blob: blob, name: `meguri-photos-${todayLocal()}.zip`, count: photos.length };
+    });
+    const groups = [];
+    if (kind === 'video') {
+      let cur = [], bytes = 0;
+      for (const p of items) {
+        const s = p.size || (p.blob && p.blob.size) || 0;
+        if (cur.length && bytes + s > VIDEO_PART_BYTES) { groups.push(cur); cur = []; bytes = 0; }
+        cur.push(p);
+        bytes += s;
+      }
+      if (cur.length) groups.push(cur);
+    } else {
+      groups.push(items);
+    }
+    const base = (kind === 'video' ? 'meguri-videos-' : 'meguri-photos-') + todayLocal();
+    const out = [];
+    let done = 0;
+    for (let i = 0; i < groups.length; i++) {
+      const g = groups[i];
+      const blob = await Zip.write(g.map(fileOf), (d) => { if (onProgress) onProgress(done + d, items.length); });
+      done += g.length;
+      out.push({ blob: blob, name: base + (groups.length > 1 ? '-' + (i + 1) : '') + '.zip', count: g.length });
+    }
+    return out;
+  }
+
+  // ★時間のかかる処理の間は画面を消さない★（v105）
+  // 画面が消えるとブラウザは裏に回され、読み込みが止まる（動画1GBは数分かかる）。
+  // 「移動を記録」の state.wakeLock とは別に持つ（記録中に読み込んでも、記録の方を外さないように）。
+  let busyLock = null;
+  async function holdScreen(on) {
+    if (on) {
+      if (busyLock || !navigator.wakeLock) return;
+      try { busyLock = await navigator.wakeLock.request('screen'); } catch (e) { busyLock = null; }
+    } else if (busyLock) {
+      try { await busyLock.release(); } catch (e) { /* もう外れている */ }
+      busyLock = null;
+    }
   }
 
   // ★場所ごとのフォルダに分ける★
@@ -7724,11 +7776,18 @@
   // 前は「1枚ずつ見出しを読む（確かめています）」→「1枚ずつ確定する（読み込んでいます）」で、
   // どちらもスマホでは1回ごとに待たされた。Zip.extract で近くの写真をまとめて読み、
   // 読めたかたまり（20〜30枚）ごとに1回で確定する。
+  // onProgress(入れた数, 全部, 動画のとき { no, of, mb }) を返す。
+  // ★動画は1本ずつ入れ、失敗しても止めない★（v105）
+  // 動画は1本100MB前後を端末の保存場所へ写すので、1本で数十秒かかる。前は1本失敗すると
+  // 全体が終わり、何本入ったかも分からなかった。失敗した分は名前を控えて最後に知らせる。
+  // 入った分は1本ずつ確定しているので、同じファイルをもう一度読み込めば続きから入る。
   async function importPhotoZip(file, plan, onProgress) {
     for (const p of plan.rename) await Store.renamePhoto(p.id, p.name);
-    if (!plan.add.length) return 0;
+    const res = { n: 0, failed: [] };
+    if (!plan.add.length) return res;
     const byEnt = new Map(plan.add.map((p) => [p.ent, p]));
-    let n = 0;
+    const videos = plan.add.filter((p) => typeOf(p.file).indexOf('video/') === 0).length;
+    let vno = 0;
     await Zip.extract(file, plan.add.map((p) => p.ent), async (got) => {
       const recs = got.map((g) => {
         const p = byEnt.get(g.ent);
@@ -7736,10 +7795,27 @@
         if (p.name) rec.name = p.name;
         return rec;
       });
-      n += await Store.putPhotosBatch(recs);
-      if (onProgress) onProgress(n, plan.add.length);
+      const vids = recs.filter((r) => r.type.indexOf('video/') === 0);
+      if (!vids.length) {
+        res.n += await Store.putPhotosBatch(recs);
+      } else {
+        // 動画が混ざるかたまりは1つずつ入れる（1つ失敗しても他を道連れにしない）
+        for (const r of recs) {
+          const isV = r.type.indexOf('video/') === 0;
+          if (isV) {
+            vno++;
+            if (onProgress) onProgress(res.n, plan.add.length, { no: vno, of: videos, mb: Math.round(r.size / 1048576) });
+          }
+          try {
+            res.n += await Store.putPhotosBatch([r]);
+          } catch (e) {
+            res.failed.push((r.name || r.id) + '（' + Math.round(r.size / 1048576) + 'MB）');
+          }
+        }
+      }
+      if (onProgress) onProgress(res.n, plan.add.length);
     });
-    return n;
+    return res;
   }
 
   // ★時間のかかる処理は、動いていることを見せる★
@@ -8022,29 +8098,48 @@
 
     initPickExport();
 
-    const pb = $('#btn-photos');
-    if (pb) pb.addEventListener('click', async () => {
-      const label = pb.textContent;
-      pb.disabled = true;
-      pb.textContent = 'まとめています…';
-      try {
-        showBusy('写真をまとめています');
-        const z = await buildPhotoZip((done, all) => {
-          pb.textContent = 'まとめています… ' + done + '/' + all;
-          showBusy('写真をまとめています', done, all);
-        });
-        hideBusy();
-        if (!z) { toast('写真がありません'); return; }
-        saveFile(new File([z.blob], z.name, { type: 'application/zip' }));
-        toast(z.count + ' 枚を書き出しました');
-      } catch (e) {
-        toast('書き出せませんでした: ' + e.message);
-      } finally {
-        hideBusy();
-        pb.disabled = false;
-        pb.textContent = label;
-      }
-    });
+    // 写真を保存／動画を保存（v105で分けた）
+    const mediaSave = (btn, kind) => {
+      if (!btn) return;
+      const what = kind === 'video' ? '動画' : '写真';
+      const unit = kind === 'video' ? '本' : '枚';
+      btn.addEventListener('click', async () => {
+        const label = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = 'まとめています…';
+        await holdScreen(true);
+        try {
+          showBusy(what + 'をまとめています');
+          const parts = await buildMediaZips(kind, (done, all) => {
+            btn.textContent = 'まとめています… ' + done + '/' + all;
+            showBusy(what + 'をまとめています', done, all);
+          });
+          hideBusy();
+          if (!parts.length) { toast(what + 'がありません'); return; }
+          for (let i = 0; i < parts.length; i++) {
+            if (i) await new Promise((r) => setTimeout(r, 800));   // 続けて保存すると止められることがある
+            saveFile(new File([parts[i].blob], parts[i].name, { type: 'application/zip' }));
+          }
+          const n = parts.reduce((a, p) => a + p.count, 0);
+          if (parts.length > 1) {
+            alert(what + ' ' + n + ' ' + unit + 'を、' + parts.length + ' つのファイルに分けて保存しました'
+              + '（1ファイル500MBまで）。\n\n読み込むときは、1つずつ「読み込み」から選んでください。'
+              + '\n「このサイトから複数のファイルをダウンロード」と聞かれたら、許可してください。');
+          } else {
+            toast(n + ' ' + unit + 'を書き出しました');
+          }
+        } catch (e) {
+          toast('書き出せませんでした: ' + e.message);
+        } finally {
+          hideBusy();
+          await holdScreen(false);
+          btn.disabled = false;
+          btn.textContent = label;
+        }
+      });
+    };
+    mediaSave($('#btn-photos'), 'photo');
+    mediaSave($('#btn-videos'), 'video');
     // ★ファイルが届くまでの間も、待っていることを見せる★（v99）
     // スマホでは、ファイルを選んでから「読み込みますか？」が出るまで1分以上かかることがあった。
     // その間何も出ないので何度も押され、読み込みが重なっておかしくなった。
@@ -8110,34 +8205,49 @@
         hideBusy();
         if (!plan.total) throw new Error('写真が入っていませんでした');
         if (!plan.add.length && !plan.rename.length) {
-          alert('この端末に無い写真はありませんでした。\n\n'
+          alert('この端末に無い写真・動画はありませんでした。\n\n'
             + '　' + f0.name + '\n'
-            + '　写真 ' + plan.total + ' 枚は、どれももう入っています。');
+            + '　' + plan.total + ' 件は、どれももう入っています。');
           return;
         }
-        const ok = confirm('写真のファイルを読み込みます。\n\n'
-          + '　' + f0.name + '\n'
-          + '　写真 ' + plan.total + ' 枚（' + (f0.size / 1048576).toFixed(1) + 'MB）\n'
-          + '　　この端末に無い写真 ' + plan.add.length + ' 枚 → 読み込みます\n'
-          + (plan.same ? '　　もう入っている写真 ' + plan.same + ' 枚 → そのまま\n' : '')
-          + (plan.rename.length ? '　　（そのうち名前が違う ' + plan.rename.length + ' 枚は、名前だけ合わせます）\n' : '')
-          + '\n今ある写真は消えません。\n\n読み込みますか？');
+        const addV = plan.add.filter((p) => typeOf(p.file).indexOf('video/') === 0);
+        const addMB = Math.round(plan.add.reduce((a, p) => a + (p.ent.size || 0), 0) / 1048576);
+        const addP = plan.add.length - addV.length;
+        const what = [addP ? '写真 ' + addP + ' 枚' : '', addV.length ? '動画 ' + addV.length + ' 本' : '']
+          .filter(Boolean).join('・');
+        const ok = confirm('写真・動画のファイルを読み込みます。\n\n'
+          + '　' + f0.name + '（' + (f0.size / 1048576).toFixed(1) + 'MB）\n'
+          + '　　この端末に無い分 ' + what + '（' + addMB + 'MB）→ 読み込みます\n'
+          + (plan.same ? '　　もう入っている ' + plan.same + ' 件 → そのまま\n' : '')
+          + (plan.rename.length ? '　　（そのうち名前が違う ' + plan.rename.length + ' 件は、名前だけ合わせます）\n' : '')
+          + (addV.length ? '\n動画は1本ずつ入るので時間がかかります（100MBで数十秒が目安）。'
+            + '途中で止まっても、もう一度同じファイルを読み込めば続きから入ります。\n' : '')
+          + '\n今ある写真・動画は消えません。\n\n読み込みますか？');
         if (!ok) return;
+        await holdScreen(true);
+        const sub = addV.length ? { sub: '画面は消えないようにしてあります。動画は1本ずつ入るので、数字が止まって見えても進んでいます。' } : null;
         if (plan.rename.length) showBusy('写真の名前を合わせています');
-        else showBusy('写真を読み込んでいます', 0, plan.add.length);
-        const n = await importPhotoZip(f0, plan, (done, all) => {
-          showBusy('写真を読み込んでいます', done, all);
+        else showBusy(addV.length ? '写真・動画を読み込んでいます' : '写真を読み込んでいます', 0, plan.add.length, sub);
+        const r = await importPhotoZip(f0, plan, (done, all, v) => {
+          if (v) showBusy('動画を入れています ' + v.no + ' / ' + v.of + ' 本（' + v.mb + 'MB）', done, all, sub);
+          else showBusy('写真・動画を読み込んでいます', done, all, sub);
         });
         showBusy('仕上げています');
         await renderPhotoSize();
         await renderHistory(true);
         hideBusy();
-        alert('写真を ' + n + ' 枚読み込みました。'
-          + (plan.same ? '\nもう入っていた ' + plan.same + ' 枚はそのままです。' : '')
-          + (plan.rename.length ? '\n名前を合わせた写真 ' + plan.rename.length + ' 枚' : ''));
+        alert(r.n + ' 件を読み込みました。'
+          + (plan.same ? '\nもう入っていた ' + plan.same + ' 件はそのままです。' : '')
+          + (plan.rename.length ? '\n名前を合わせた写真 ' + plan.rename.length + ' 件' : '')
+          + (r.failed.length ? '\n\n読み込めなかったもの ' + r.failed.length + ' 件:\n　' + r.failed.slice(0, 8).join('\n　')
+            + (r.failed.length > 8 ? '\n　ほか ' + (r.failed.length - 8) + ' 件' : '')
+            + '\n\n端末の空きが足りないと失敗します。空きを作ってから、同じファイルをもう一度読み込むと、入っていない分だけ入ります。' : ''));
       } catch (err) {
         hideBusy();
-        alert('読み込めませんでした: ' + err.message);
+        alert('読み込めませんでした: ' + err.message
+          + '\n\nここまでに入った分は残っています。同じファイルをもう一度読み込むと、続きから入ります。');
+      } finally {
+        await holdScreen(false);
       }
     }
 
