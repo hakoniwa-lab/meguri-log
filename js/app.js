@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v105';
+  const APP_VERSION = 'v106';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -388,8 +388,21 @@
 
     // 一覧にもOSMにも無い場所は、地図を長押しして自分で登録する。
     // Leafletは長押し・右クリックの両方で contextmenu を出す。
+    // ★位置は押し始めた地点で決める★（v106）本人「長押しで登録すると全然違う所に付いていて、毎回直している」。
+    // 指は押している間にわずかに揺れ、地図は3px動くとドラッグを始める。ブラウザは押した瞬間の
+    // 画面の位置で長押しを知らせてくるので、地図が動いた分だけ記録の位置がずれていた。
+    let pressAt = null;
+    state.map.getContainer().addEventListener('pointerdown', (ev) => {
+      pressAt = ev.isPrimary === false ? null
+        : { ll: state.map.mouseEventToLatLng(ev), t: Date.now(), x: ev.clientX, y: ev.clientY };
+    }, true);
     state.map.on('contextmenu', (e) => {
-      recordAtPoint(e.latlng.lat, e.latlng.lng);
+      let ll = e.latlng;
+      const oe = e.originalEvent;
+      if (pressAt && oe && Date.now() - pressAt.t < 3000
+          && Math.hypot(oe.clientX - pressAt.x, oe.clientY - pressAt.y) < 40) ll = pressAt.ll;
+      pressAt = null;
+      startPointRecord(ll.lat, ll.lng);
     });
 
     const tl = $('#btn-track-line');
@@ -1286,6 +1299,15 @@
     toast(n ? 'ランドマーク ' + n + '件' : 'この範囲にはありません');
 
     if (state.marksPending) { state.marksPending = false; renderLandmarks(true); }
+  }
+
+  // ★縮尺が小さいときは、十字で合わせてから記録する★（v106）
+  // 指先は画面で40px前後ある。市町村が見えるくらいの縮尺では40pxが数百mになり、
+  // 押したつもりの所から簡単にずれる。十分に寄っているとき（17以上）はそのまま記録する。
+  const PRESS_EXACT_ZOOM = 17;
+  function startPointRecord(lat, lng) {
+    if (state.map.getZoom() >= PRESS_EXACT_ZOOM) { recordAtPoint(lat, lng); return; }
+    openPinMove({ lat: lat, lng: lng }, 'new');
   }
 
   // 地図で長押しした地点を記録する。市区町村と町丁目は座標から自動で決まるので、
@@ -2625,9 +2647,16 @@
     if (b) b.hidden = !c;                 // 直す出発点すら無いときだけ隠す
   }
 
-  function openPinMove() {
-    const c = currentSheetCoords();
+  // start … 十字を合わせ始める位置。mode が 'new' のときは、決めた位置で新しく記録する（長押しから）
+  function openPinMove(start, mode) {
+    state.pinMode = mode === 'new' ? 'new' : 'edit';
+    const c = (start && typeof start.lat === 'number') ? start : currentSheetCoords();
     if (!c) { toast('直せる位置がありません'); return; }
+    const isNew = state.pinMode === 'new';
+    $('#pinmove-note').textContent = isNew
+      ? '拡大しました。十字を記録したい場所に合わせてください'
+      : '十字を正しい場所に合わせてください';
+    $('#pinmove-ok').textContent = isNew ? 'ここで記録する' : 'ここにする';
     const box = $('#pinmove');
     box.hidden = false;
     if (!state.pinMap) {
@@ -2648,6 +2677,13 @@
   }
 
   async function commitPinMove() {
+    if (state.pinMode === 'new' && state.pinMap) {
+      const n = state.pinMap.getCenter();
+      closePinMove();
+      state.map.setView([n.lat, n.lng], Math.max(state.map.getZoom(), PRESS_EXACT_ZOOM));
+      await recordAtPoint(n.lat, n.lng);
+      return;
+    }
     if (!state.pinMap || !state.selected) { closePinMove(); return; }
     const c = state.pinMap.getCenter();
     const before = currentSheetCoords();
@@ -3341,7 +3377,7 @@
     initExtraFields();
     $('#sheet-close').addEventListener('click', closeSheet);
     const mvb = $('#sheet-movepin');
-    if (mvb) mvb.addEventListener('click', openPinMove);
+    if (mvb) mvb.addEventListener('click', () => openPinMove());
     const pmc = $('#pinmove-cancel');
     if (pmc) pmc.addEventListener('click', closePinMove);
     const pmo = $('#pinmove-ok');
