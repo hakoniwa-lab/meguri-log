@@ -26,6 +26,7 @@
 <div class="app">
 
   <nav class="guide-nav" aria-label="パンくずリスト">
+    <a href="../../../">HAKONIWA LAB</a> &raquo;
     <a href="../../">めぐログ</a> &raquo;
     <span aria-current="page">御朱印も城も駅も1つのアプリで記録する</span>
   </nav>
@@ -324,6 +325,73 @@
 
     </section>
   </main>
+
+  <!-- site-nav:start -->
+  <style>
+  .site-nav { margin: 40px 0 0; padding: 22px 0 0; border-top: 1px solid var(--color-border, var(--line, #dbcba0)); color: var(--color-text, var(--ink, #2b2620)); text-align: left; }
+  .site-nav__title { margin: 0 0 14px; font-size: 0.82rem; font-weight: 700; color: var(--color-text-muted, var(--muted, #6e6248)); }
+  .site-nav__title a { font-family: Georgia, "Times New Roman", serif; font-size: 0.95rem; letter-spacing: 0.04em; color: var(--color-text, var(--ink, #2b2620)); text-decoration: none; }
+  .site-nav__groups { display: grid; gap: 14px 24px; }
+  @media (min-width: 560px) { .site-nav__groups { grid-template-columns: 1fr 1fr; } }
+  .site-nav__label { margin: 0 0 4px; font-size: 0.74rem; font-weight: 700; color: var(--color-text-muted, var(--muted, #6e6248)); }
+  .site-nav__links { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 0; padding: 0; list-style: none; font-size: 0.86rem; line-height: 1.7; }
+  .site-nav__links li { margin: 0; padding: 0; }
+  .site-nav__links li::before { content: none; }
+  .site-nav__links a { color: var(--color-primary, var(--navy, #a8631f)); }
+  .site-nav__all { margin: 16px 0 0; font-size: 0.86rem; text-align: right; }
+  .site-nav__all a { color: var(--color-primary, var(--navy, #a8631f)); font-weight: 700; }
+  .app-footer a { color: var(--color-text-muted, var(--muted, #6e6248)); }
+  </style>
+  <nav class="site-nav" aria-label="HAKONIWA LABのツール">
+    <p class="site-nav__title"><a href="../../../">HAKONIWA LAB</a> の無料ツール</p>
+    <div class="site-nav__groups">
+      <div>
+        <p class="site-nav__label">家族を見送ったあとに</p>
+        <ul class="site-nav__links">
+          <li><a href="../../../houyou-calendar/">法要日程カレンダー</a></li>
+          <li><a href="../../../houyou-calendar/hayami/">年忌早見表</a></li>
+          <li><a href="../../../houyou-calendar/tetsuzuki/">死亡後の手続きの期限</a></li>
+          <li><a href="../../../houyou-calendar/pet/">ペットの法要</a></li>
+        </ul>
+      </div>
+      <div>
+        <p class="site-nav__label">仕事を辞めるとき・変えるとき</p>
+        <ul class="site-nav__links">
+          <li><a href="../../../resignation-letter-generator/">退職願・退職届を作る</a></li>
+          <li><a href="../../../retirement-simulator/">退職金の手取り</a></li>
+          <li><a href="../../../subsidy-checker/">使える給付金を探す</a></li>
+          <li><a href="../../../career-checker/">転職エージェントを選ぶ</a></li>
+        </ul>
+      </div>
+      <div>
+        <p class="site-nav__label">収入と税金を知りたいとき</p>
+        <ul class="site-nav__links">
+          <li><a href="../../../takehome-calculator/">手取り年収</a></li>
+          <li><a href="../../../furusato-simulator/">ふるさと納税の上限額</a></li>
+          <li><a href="../../../sidejob-tax-simulator/">副業の税金</a></li>
+          <li><a href="../../../sidejob-checker/">向いている副業</a></li>
+        </ul>
+      </div>
+      <div>
+        <p class="site-nav__label">備えと資産</p>
+        <ul class="site-nav__links">
+          <li><a href="../../../insurance-checker/">必要な保険</a></li>
+          <li><a href="../../../retirement-simulator/ideco/">iDeCoの受け取り方</a></li>
+          <li><a href="../../../stock-screener/">株の条件検索</a></li>
+        </ul>
+      </div>
+      <div>
+        <p class="site-nav__label">暦と楽しみ</p>
+        <ul class="site-nav__links">
+          <li><a href="../../../birthday-fortune/">生まれ日診断</a></li>
+          <li><a href="../../../birthday-fortune/calendar/">吉日カレンダー</a></li>
+          <li><a href="../../../meguri-log/">めぐった場所の記録</a></li>
+        </ul>
+      </div>
+    </div>
+    <p class="site-nav__all"><a href="../../../">すべてのツールを見る →</a></p>
+  </nav>
+  <!-- site-nav:end -->
 
   <footer class="app-footer">
     <p><a href="https://hakoniwalab.com/">HAKONIWA LAB</a> ／ <a href="../../">めぐログ</a><br><a href="https://hakoniwalab.com/about.html">運営者情報</a> ・ <a href="https://hakoniwalab.com/contact.html">お問い合わせ</a> ・ <a href="https://hakoniwalab.com/privacy.html">プライバシーポリシー</a></p>
