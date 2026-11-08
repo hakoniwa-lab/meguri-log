@@ -9,7 +9,7 @@
 
   // sw.js の VERSION と必ず揃えること。設定画面に表示され、
   // 端末に届いている版を目視で確認できるようにしている。
-  const APP_VERSION = 'v106';
+  const APP_VERSION = 'v107';
 
   // 国土地理院の逆ジオコーディング（APIキー不要）。
   // 町丁目・大字は約20万区域あり、境界データを配ると100MB超になって実用にならない。
@@ -374,6 +374,7 @@
     // 地図を動かしても勝手には取りに行かない。「この範囲で探す」を出して、
     // 押されたときだけ探す。いつ検索しているかが分かり、提供元への負荷も減る。
     state.map.on('moveend', () => {
+      maybeLoadMuniDetail();    // 寄せたら、その県の細かい境界線を読む（v107）
       state.markCache = null;   // 範囲が変わったら取り直す
       if (state.marksOn) showSearchArea(true);
       if (state.colPinsOn) renderCollectPins(false);
@@ -615,6 +616,80 @@
         layer.bindTooltip(feat.properties.name, { sticky: true });
       },
     }).addTo(state.map);
+    maybeLoadMuniDetail();
+  }
+
+  // ---------------------------------------------------------------
+  // 市区町村の細かい境界線（v107）
+  // ---------------------------------------------------------------
+  // 本人「市区町村の境界が雑。諦めるしかないのか」。municipalities.geojson は2MBに収めるため
+  // 角と角の間隔が中央値で約1.2kmあり、拡大すると道や川とずれて見えた。
+  // 国土数値情報（行政区域・2021年版）から約10mで間引いた線を県ごとに用意し（data/muni/XX.json、
+  // 全部で30MB・送るときは圧縮されて8MB）、★寄せたときに見えている県だけ★読んで形を差し替える。
+  // 差し替えた後は「どの市区町村にいるか」（通った市区町村など）も細かい線で判定される。
+  const MUNI_DETAIL_ZOOM = 11;
+  const muniDetail = { loaded: new Set(), loading: new Map() };
+
+  function ensureMuniDetail(pref) {
+    pref = String(pref).padStart(2, '0');
+    if (muniDetail.loaded.has(pref)) return Promise.resolve(true);
+    if (muniDetail.loading.has(pref)) return muniDetail.loading.get(pref);
+    const job = (async () => {
+      try {
+        const d = await fetch('./data/muni/' + pref + '.json').then((r) => {
+          if (!r.ok) throw new Error(String(r.status));
+          return r.json();
+        });
+        const gj = state.geo.city;
+        if (!gj) return false;
+        const byCode = new Map(d.features.map((f) => [String(f.properties.code), f.geometry]));
+        const changed = new Set();
+        for (const f of gj.features) {
+          const g = byCode.get(String(f.properties.code));
+          if (g) { f.geometry = g; changed.add(f); }
+        }
+        muniDetail.loaded.add(pref);
+        // 描いてある線も差し替える（全部を描き直すと重いので、変わった市区町村だけ）
+        if (state.layer && state.level === 'city') {
+          state.layer.eachLayer((l) => {
+            if (changed.has(l.feature)) l.setLatLngs(L.GeoJSON.coordsToLatLngs(l.feature.geometry.coordinates, 2));
+          });
+        }
+        return true;
+      } catch (e) {
+        return false;                         // 圏外などは粗い線のまま（次に寄せたときにもう一度）
+      } finally {
+        muniDetail.loading.delete(pref);
+      }
+    })();
+    muniDetail.loading.set(pref, job);
+    return job;
+  }
+
+  // 見えている範囲にかかる県（まだ細かい線を読んでいないもの）
+  function prefsInView() {
+    const gj = state.geo.city;
+    if (!gj || !state.map) return [];
+    const b = state.map.getBounds();
+    const w = b.getWest(), e = b.getEast(), s = b.getSouth(), n = b.getNorth();
+    const out = new Set();
+    for (const f of gj.features) {
+      const pref = String(f.properties.code).slice(0, 2);
+      if (out.has(pref) || muniDetail.loaded.has(pref)) continue;
+      for (const poly of f.geometry.coordinates) {
+        const bb = polyBox(poly);
+        if (bb[0] <= e && bb[2] >= w && bb[1] <= n && bb[3] >= s) { out.add(pref); break; }
+      }
+    }
+    return Array.from(out);
+  }
+
+  function maybeLoadMuniDetail() {
+    if (state.level !== 'city' || !state.geo.city || !state.map) return;
+    if (state.map.getZoom() < MUNI_DETAIL_ZOOM) return;
+    const prefs = prefsInView();
+    if (prefs.length > 4) return;             // 広すぎるときは、もう少し寄ってから
+    prefs.forEach((p) => { ensureMuniDetail(p); });
   }
 
   function refreshMap() {
@@ -1111,7 +1186,8 @@
     const g = f.geometry;
     if (!g) return null;
     if (g.type === 'Polygon') g.coordinates.forEach(eat);
-    else if (g.type === 'MultiPolygon') g.coordinates.forEach((poly) => poly.forEach(eat));
+    // ★外周だけ数える★ 細かい境界線（v107）には穴が入っていて、穴の点まで足すと中心がずれる
+    else if (g.type === 'MultiPolygon') g.coordinates.forEach((poly) => eat(poly[0]));
     else return null;
     return n ? [sy / n, sx / n] : null;
   }
@@ -2030,12 +2106,36 @@
   // 2km。これ以上離れていたら本当に海の上なので何も返さない。
   const SNAP_DEG = 0.02;
 
+  // 多角形ごとの外接矩形（v107）。細かい境界線（data/muni）を読むと点が数十倍になるので、
+  // 矩形に入らない多角形は中身を見ない。形を差し替えると配列ごと変わるので、そのとき作り直される。
+  const POLY_BB = new WeakMap();
+  function polyBox(poly) {
+    let bb = POLY_BB.get(poly);
+    if (bb) return bb;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const p of poly[0]) {
+      if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0];
+      if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1];
+    }
+    bb = [x0, y0, x1, y1];
+    POLY_BB.set(poly, bb);
+    return bb;
+  }
+  // ★穴も見る★ 細かい境界線には、市の中にある別の町（飛び地を囲む側）の穴が入っている
+  function inPoly(lng, lat, poly) {
+    const bb = polyBox(poly);
+    if (lng < bb[0] || lng > bb[2] || lat < bb[1] || lat > bb[3]) return false;
+    if (!pointInRing(lng, lat, poly[0])) return false;
+    for (let i = 1; i < poly.length; i++) if (pointInRing(lng, lat, poly[i])) return false;
+    return true;
+  }
+
   function findAt(level, lat, lng) {
     const gj = state.geo[level];
     if (!gj) return null;
     for (const f of gj.features) {
       for (const poly of f.geometry.coordinates) {
-        if (pointInRing(lng, lat, poly[0])) return f;
+        if (inPoly(lng, lat, poly)) return f;
       }
     }
     return nearestFeature(gj, lat, lng);
@@ -2047,6 +2147,9 @@
     let hit = null;
     for (const f of gj.features) {
       for (const poly of f.geometry.coordinates) {
+        const bb = polyBox(poly);
+        if (lng < bb[0] - SNAP_DEG / cos || lng > bb[2] + SNAP_DEG / cos
+            || lat < bb[1] - SNAP_DEG || lat > bb[3] + SNAP_DEG) continue;
         for (const pt of poly[0]) {
           const dx = (pt[0] - lng) * cos;
           const dy = pt[1] - lat;
@@ -5663,6 +5766,8 @@
 
     const f = findAt('city', lat, lng);
     if (!f) return;                            // 海の上・国外
+    // 今いる県の細かい境界線を読んでおく（地図を寄せていなくても、通った判定は細かい線で）
+    ensureMuniDetail(String(f.properties.code).slice(0, 2));
     const id = spotIdOf('city', f.properties.code);
     if (state.passed.has(id) || state.visited.city.has(id)) {
       state.trackLast = f.properties.name;
@@ -5865,20 +5970,17 @@
   // リストが1本だけ静かに消える。「足したはずのリストが出てこない」の原因探しに2回かかった。
   async function loadCollections() {
     if (state.collections) return state.collections;
+    // ★97本を1本ずつ順番に待たない★（v107）まとめて頼み、並びは登録順のまま揃える
+    const got = await Promise.all(BUILTIN_COLLECTIONS.map((b) => fetch(b.file)
+      .then((r) => {
+        if (!r.ok) throw new Error(String(r.status));
+        return r.json();
+      })
+      .then((d) => { d.builtin = true; return d; })
+      .catch(() => null)));
     const out = [];
     const failed = [];
-    for (const b of BUILTIN_COLLECTIONS) {
-      try {
-        const d = await fetch(b.file).then((r) => {
-          if (!r.ok) throw new Error(String(r.status));
-          return r.json();
-        });
-        d.builtin = true;
-        out.push(d);
-      } catch (e) {
-        failed.push(b.id);
-      }
-    }
+    got.forEach((d, i) => { if (d) out.push(d); else failed.push(BUILTIN_COLLECTIONS[i].id); });
     state.collections = out;
     state.collectFailed = failed;
     return out;
@@ -5940,6 +6042,51 @@
     return a.indexOf(b) >= 0 || b.indexOf(a) >= 0;
   }
 
+  // ★記録を名前と場所で引けるようにしておく★（v107）
+  // 本人「リストが出るまで少し時間がかかる」。測ると、読み込みは0.15秒で、残りの5.5秒（パソコンで）は
+  // 「行ったか」の判定だった。リストの約3万か所それぞれについて、記録670件すべてとの距離を
+  // 計算していた（約2,000万回）。
+  // 判定で「行った」になりうるのは、(1)名前が同じ記録 (2)近い（near 以内の）記録 だけ。
+  // その2つだけを先に引いて、あとは今までと同じ判定にかける（結果は変わらない）。
+  // 記録の配列ごとに1回だけ作る（同じ描き直しの中では同じ配列が渡ってくる）。
+  const VISIT_IDX = new WeakMap();
+  const VIDX_CELL = 0.01;                    // 度（約1km）の升目
+  function visitIndexOf(visits) {
+    let ix = VISIT_IDX.get(visits);
+    if (ix) return ix;
+    const byName = new Map(), grid = new Map();
+    visits.forEach((v, i) => {
+      const vn = nameKey(v.place && v.place.name);
+      if (vn) { if (!byName.has(vn)) byName.set(vn, []); byName.get(vn).push(i); }
+      if (v.coords && typeof v.coords.lat === 'number') {
+        const k = Math.floor(v.coords.lat / VIDX_CELL) + ',' + Math.floor(v.coords.lng / VIDX_CELL);
+        if (!grid.has(k)) grid.set(k, []);
+        grid.get(k).push(i);
+      }
+    });
+    ix = { byName: byName, grid: grid };
+    VISIT_IDX.set(visits, ix);
+    return ix;
+  }
+  // その場所の判定にかける記録（名前が同じもの＋ near 以内の升目にあるもの）。元の並び順のまま返す
+  function visitCandidates(visits, item, nm, near) {
+    const ix = visitIndexOf(visits);
+    const pick = new Set(ix.byName.get(nm) || []);
+    if (typeof item.lat === 'number' && typeof item.lng === 'number') {
+      const dy = near / 110000;
+      const dx = near / (110000 * Math.max(0.2, Math.cos(item.lat * Math.PI / 180)));
+      const i0 = Math.floor((item.lat - dy) / VIDX_CELL), i1 = Math.floor((item.lat + dy) / VIDX_CELL);
+      const j0 = Math.floor((item.lng - dx) / VIDX_CELL), j1 = Math.floor((item.lng + dx) / VIDX_CELL);
+      for (let i = i0; i <= i1; i++) {
+        for (let j = j0; j <= j1; j++) {
+          const c = ix.grid.get(i + ',' + j);
+          if (c) for (const n of c) pick.add(n);
+        }
+      }
+    }
+    return Array.from(pick).sort((a, b) => a - b).map((n) => visits[n]);
+  }
+
   // col … そのリスト（距離の幅 reach とタグ tag を見る）
   function visitedItem(item, visits, hand, col) {
     const reach = col && col.reach;
@@ -5948,7 +6095,7 @@
     const near = (reach && reach.near) || COLLECT_NEAR;
     const nearNamed = (reach && reach.nearNamed) || COLLECT_NEAR_NAMED;
     const nm = nameKey(item.name);
-    for (const v of visits) {
+    for (const v of visitCandidates(visits, item, nm, near)) {
       const vn = nameKey(v.place && v.place.name);
       const same = !!(nm && vn && nm === vn);
       const hasPos = !!(v.coords && typeof v.coords.lat === 'number');
